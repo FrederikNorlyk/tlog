@@ -1,0 +1,22 @@
+[package]
+name = "tlog"
+version = "0.1.0"
+edition = "2024"
+
+[lints.clippy]
+all = "deny"           # Fail the build instead of warn
+pedantic = "deny"      # Pedantic lints also fail
+correctness = "deny"   # Correctness issues
+complexity = "deny"    # Overly complex code
+perf = "deny"          # Performance anti-patterns
+style = "deny"         # Style issues
+suspicious = "deny"    # Suspicious patterns
+
+[lints.rust]
+unsafe_code = "deny"
+unused = "deny"
+
+[dependencies]
+rusqlite = { version = "0.40.0", features = ["bundled"]}
+clap = { version = "4.6.1", features = ["derive"] }
+directories = "6.0.0"
