@@ -7,18 +7,17 @@ use tlog::cli::config_command::ConfigCommand;
 use tlog::cli::project_command::ProjectCommand;
 use tlog::cli::session_command::SessionCommand;
 use tlog::core::tracking::Tracking;
-use tlog::db::database::{Database, Repository};
+use tlog::db::database::Database;
 use tlog::db::event_repository::EventRepository;
 use tlog::db::project_repository::ProjectRepository;
 use tlog::tui::app::TerminalUserInterface;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let database = Database::new()?;
+    database.init()?;
+    
     let project_repository = ProjectRepository::new(database.connection());
     let event_repository = EventRepository::new(database.connection());
-
-    project_repository.initialize_schema()?;
-    event_repository.initialize_schema()?;
 
     let cli = Cli::parse();
 

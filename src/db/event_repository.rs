@@ -1,7 +1,7 @@
 use crate::db::database::Repository;
 use crate::model::event::{Event, EventType};
 use crate::model::session::Session;
-use rusqlite::{Connection, OptionalExtension, Result, Row, named_params};
+use rusqlite::{named_params, Connection, OptionalExtension, Result, Row};
 
 pub struct EventRepository<'a> {
     connection: &'a Connection,
@@ -246,9 +246,9 @@ impl<'a> EventRepository<'a> {
     }
 }
 
-impl Repository for EventRepository<'_> {
-    fn initialize_schema(&self) -> Result<()> {
-        self.connection.execute(
+impl<'a> Repository<'a> for EventRepository<'a> {
+    fn initialize_schema(connection: &'a Connection) -> Result<()> {
+        connection.execute(
             "CREATE TABLE IF NOT EXISTS event (
                 id INTEGER PRIMARY KEY,
                 project_id INTEGER NOT NULL,
@@ -261,17 +261,49 @@ impl Repository for EventRepository<'_> {
             (),
         )?;
 
-        self.connection.execute(
+        connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_event_project_timestamp
             ON event(project_id, timestamp DESC)",
             (),
         )?;
 
-        self.connection.execute(
+        connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_event_project_type_timestamp
             ON event(project_id, event_type, timestamp)",
             (),
         )?;
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use crate::db::database::Database;
+    use crate::db::event_repository::EventRepository;
+    use crate::model::event::EventType::{Start, Stop};
+    use rusqlite::Result;
+    use crate::db::project_repository::ProjectRepository;
+
+    #[test]
+    fn test_session_duration_calculation() -> Result<(), Box<dyn Error>> {
+        let database = Database::new_in_memory_db()?;
+        database.init()?;
+
+        let project_reposity = ProjectRepository::new(&database.connection());
+        project_reposity.insert("Test name", None)?;
+        let event_repository = EventRepository::new(&database.connection());
+
+        let start_timestamp = 1780140094;
+        event_repository.insert(1, Start, start_timestamp)?;
+        event_repository.insert(1, Stop, start_timestamp + 300)?;
+
+        event_repository.for_each_session(Some(1), None, |session| {
+            assert_eq!(session.project_id, 1);
+            assert_eq!(session.total_seconds, 300);
+            Ok(())
+        })?;
 
         Ok(())
     }

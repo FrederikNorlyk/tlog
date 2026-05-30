@@ -111,9 +111,9 @@ impl<'a> ProjectRepository<'a> {
     }
 }
 
-impl Repository for ProjectRepository<'_> {
-    fn initialize_schema(&self) -> Result<()> {
-        self.connection.execute(
+impl<'a> Repository<'a> for ProjectRepository<'a> {
+    fn initialize_schema(connection: &'a Connection) -> Result<()> {
+        connection.execute(
             "CREATE TABLE IF NOT EXISTS project (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL CHECK(length(trim(name)) > 0),
