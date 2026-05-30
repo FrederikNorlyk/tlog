@@ -1,3 +1,5 @@
+use crate::db::event_repository::EventRepository;
+use crate::db::project_repository::ProjectRepository;
 use directories::ProjectDirs;
 use rusqlite::Connection;
 use std::error::Error;
@@ -6,7 +8,7 @@ use std::path::PathBuf;
 use std::{fmt, fs};
 
 pub struct Database {
-    conn: Connection,
+    connection: Connection,
 }
 
 impl Database {
@@ -28,13 +30,24 @@ impl Database {
         }
 
         Ok(Self {
-            conn: Connection::open(db_path)?,
+            connection: Connection::open(db_path)?,
+        })
+    }
+
+    /// Opens the application database connection, creating the data directory if needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if opening the database connection fails.
+    pub fn new_in_memory_db() -> rusqlite::Result<Self> {
+        Ok(Self {
+            connection: Connection::open_in_memory()?,
         })
     }
 
     #[must_use]
     pub fn connection(&self) -> &Connection {
-        &self.conn
+        &self.connection
     }
 
     fn database_path() -> Result<PathBuf, DatabaseError> {
@@ -43,16 +56,22 @@ impl Database {
 
         Ok(project_dirs.data_dir().join("tlog.sqlite3"))
     }
+
+    pub fn init(&self) -> Result<(), DatabaseError> {
+        ProjectRepository::initialize_schema(self.connection())?;
+        EventRepository::initialize_schema(self.connection())?;
+        Ok(())
+    }
 }
 
-pub trait Repository {
+pub trait Repository<'a> {
     /// Creates or updates the database schema required by the repository.
     ///
     /// # Errors
     ///
     /// Returns an error if the underlying database fails to execute the schema
     /// initialization statements.
-    fn initialize_schema(&self) -> rusqlite::Result<()>;
+    fn initialize_schema(connection: &'a Connection) -> rusqlite::Result<()>;
 }
 
 #[derive(Debug)]

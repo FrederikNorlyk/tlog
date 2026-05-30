@@ -18,7 +18,7 @@ pub enum ProjectCommand {
     /// Update an existing project by its ID.
     Update {
         /// ID of the project to update.
-        id: u32,
+        id: i32,
 
         /// New project name.
         #[arg(
@@ -45,7 +45,7 @@ pub enum ProjectCommand {
     #[command(visible_alias = "rm")]
     Delete {
         /// ID of the project to delete.
-        id: u32,
+        id: i32,
     },
     /// List all projects.
     #[command(visible_alias = "ls")]
