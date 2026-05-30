@@ -1,15 +1,15 @@
 use crate::db::database::Repository;
 use crate::model::project::Project;
-use rusqlite::{Connection, OptionalExtension, Result, named_params};
+use rusqlite::{Connection, OptionalExtension, Result, named_params, Row};
 
 pub struct ProjectRepository<'a> {
-    conn: &'a Connection,
+    connection: &'a Connection,
 }
 
 impl<'a> ProjectRepository<'a> {
     #[must_use]
-    pub fn new(conn: &'a Connection) -> Self {
-        Self { conn }
+    pub fn new(connection: &'a Connection) -> Self {
+        Self { connection }
     }
 
     /// Inserts a new project.
@@ -20,7 +20,7 @@ impl<'a> ProjectRepository<'a> {
     /// example because the database connection is invalid, the `project` table
     /// does not exist, or the provided data violates a database constraint.
     pub fn insert(&self, name: &str, description: Option<&str>) -> Result<()> {
-        self.conn.execute(
+        self.connection.execute(
             "INSERT INTO project (name, description) VALUES (:name, :description)",
             named_params! {":name": name, ":description": description},
         )?;
@@ -36,7 +36,7 @@ impl<'a> ProjectRepository<'a> {
     /// example because the database connection is invalid, the `project` table
     /// does not exist, or the provided data violates a database constraint.
     pub fn update(&self, project: &Project) -> Result<()> {
-        self.conn.execute(
+        self.connection.execute(
             "UPDATE project SET name = :name, description = :description WHERE id = :id",
             named_params! {
                 ":name": &project.name,
@@ -55,8 +55,8 @@ impl<'a> ProjectRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the delete statement, for
     /// example because the database connection is invalid or the `project` table
     /// does not exist.
-    pub fn delete(&self, id: u32) -> Result<bool> {
-        let deleted_count = self.conn.execute(
+    pub fn delete(&self, id: i32) -> Result<bool> {
+        let deleted_count = self.connection.execute(
             "DELETE FROM project WHERE id = (:id)",
             named_params! {":id": id},
         )?;
@@ -71,8 +71,8 @@ impl<'a> ProjectRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the query, if the `project`
     /// table does not exist, if no project exists with the given ID, or if the
     /// returned row cannot be converted into a [`Project`].
-    pub fn get(&self, id: u32) -> Result<Option<Project>> {
-        self.conn
+    pub fn get(&self, id: i32) -> Result<Option<Project>> {
+        self.connection
             .query_row(
                 "SELECT id, name, description FROM project WHERE id = :id",
                 named_params! {":id": id},
@@ -89,20 +89,20 @@ impl<'a> ProjectRepository<'a> {
     /// cannot be converted into a [`Project`].
     pub fn for_each<F>(&self, mut f: F) -> Result<()>
     where
-        F: FnMut(Project),
+        F: FnMut(Project) -> Result<()>,
     {
-        let mut stmt = self.conn.prepare("SELECT * FROM project")?;
+        let mut stmt = self.connection.prepare("SELECT * FROM project")?;
 
         let rows = stmt.query_map([], Self::project_from_row)?;
 
         for project in rows {
-            f(project?);
+            f(project?)?;
         }
 
         Ok(())
     }
 
-    fn project_from_row(row: &rusqlite::Row<'_>) -> Result<Project> {
+    fn project_from_row(row: &Row<'_>) -> Result<Project> {
         Ok(Project {
             id: row.get("id")?,
             name: row.get("name")?,
@@ -113,7 +113,7 @@ impl<'a> ProjectRepository<'a> {
 
 impl Repository for ProjectRepository<'_> {
     fn initialize_schema(&self) -> Result<()> {
-        self.conn.execute(
+        self.connection.execute(
             "CREATE TABLE IF NOT EXISTS project (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL CHECK(length(trim(name)) > 0),
