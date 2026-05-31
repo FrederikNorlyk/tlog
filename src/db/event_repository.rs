@@ -245,12 +245,10 @@ impl<'a> Repository<'a> for EventRepository<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::db::database::Database;
-    use crate::db::event_repository::EventRepository;
     use crate::db::project_repository::ProjectRepository;
     use crate::model::event::EventType::{Start, Stop};
-    use crate::model::session::Session;
-    use rusqlite::Result;
 
     struct TestContext {
         database: Database,
