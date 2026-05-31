@@ -57,6 +57,12 @@ impl Database {
         Ok(project_dirs.data_dir().join("tlog.sqlite3"))
     }
 
+    /// Initializes the database schema required by the application.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatabaseError::Sqlite`] if creating or updating any repository schema
+    /// fails.
     pub fn init(&self) -> Result<(), DatabaseError> {
         ProjectRepository::initialize_schema(self.connection())?;
         EventRepository::initialize_schema(self.connection())?;

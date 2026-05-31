@@ -1,1 +1,1 @@
-pub mod app;
+pub mod terminal_user_interface;

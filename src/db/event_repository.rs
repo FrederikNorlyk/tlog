@@ -107,6 +107,16 @@ impl<'a> EventRepository<'a> {
         Ok(())
     }
 
+    /// Calls the provided function once for each latest started event per project.
+    ///
+    /// This selects projects whose most recent event is a start event, which can be
+    /// used to find projects that currently have an active session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if preparing or executing the query fails, if a returned row
+    /// cannot be converted into an [`Event`], or if the provided callback returns an
+    /// error.
     pub fn for_each_started_event<F>(&self, mut callback: F) -> Result<()>
     where
         F: FnMut(Event) -> Result<()>,
@@ -291,11 +301,11 @@ mod tests {
         let database = Database::new_in_memory_db()?;
         database.init()?;
 
-        let project_reposity = ProjectRepository::new(&database.connection());
-        project_reposity.insert("Test name", None)?;
-        let event_repository = EventRepository::new(&database.connection());
+        let project_repository = ProjectRepository::new(database.connection());
+        project_repository.insert("Test name", None)?;
+        let event_repository = EventRepository::new(database.connection());
 
-        let start_timestamp = 1780140094;
+        let start_timestamp = 1_780_140_094;
         event_repository.insert(1, Start, start_timestamp)?;
         event_repository.insert(1, Stop, start_timestamp + 300)?;
 

@@ -2,8 +2,6 @@ use crate::core::unix_timestamp::UnixTimestamp;
 use crate::db::event_repository::EventRepository;
 use crate::model::event::EventType;
 use rusqlite::Connection;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 
 pub struct Tracking<'a> {
     connection: &'a Connection,
@@ -15,7 +13,15 @@ impl<'a> Tracking<'a> {
         Self { connection }
     }
 
-    pub fn start(&self, project_id: i32) -> Result<(), TrackingError> {
+    /// Starts tracking time for the given project.
+    ///
+    /// Any currently started events are stopped before the new start event is inserted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading existing started events or inserting
+    /// the generated stop/start events into the database fails.
+    pub fn start(&self, project_id: i32) -> rusqlite::Result<()> {
         let event_repository = EventRepository::new(self.connection);
         let timestamp = UnixTimestamp::now();
 
@@ -29,7 +35,12 @@ impl<'a> Tracking<'a> {
         Ok(())
     }
 
-    pub fn stop(&self, project_id: i32) -> Result<(), TrackingError> {
+    /// Stops tracking time for the given project.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if inserting the stop event into the database fails.
+    pub fn stop(&self, project_id: i32) -> rusqlite::Result<()> {
         let event_repository = EventRepository::new(self.connection);
 
         let timestamp = UnixTimestamp::now();
@@ -37,32 +48,5 @@ impl<'a> Tracking<'a> {
         event_repository.insert(project_id, EventType::Stop, timestamp)?;
 
         Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub enum TrackingError {
-    Sqlite(rusqlite::Error),
-}
-
-impl Error for TrackingError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Sqlite(error) => Some(error),
-        }
-    }
-}
-
-impl Display for TrackingError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Sqlite(error) => write!(f, "SQLite error: {error}"),
-        }
-    }
-}
-
-impl From<rusqlite::Error> for TrackingError {
-    fn from(value: rusqlite::Error) -> Self {
-        Self::Sqlite(value)
     }
 }

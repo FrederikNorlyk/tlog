@@ -9,7 +9,7 @@ pub struct Event {
     pub timestamp: i64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum EventType {
     Start,
     Stop,

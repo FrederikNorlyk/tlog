@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::error::Error;
-use time::macros::format_description;
 use time::OffsetDateTime;
+use time::macros::format_description;
 use tlog::cli::commands::{Cli, Command};
 use tlog::cli::config_command::ConfigCommand;
 use tlog::cli::project_command::ProjectCommand;
@@ -10,19 +10,19 @@ use tlog::core::tracking::Tracking;
 use tlog::db::database::Database;
 use tlog::db::event_repository::EventRepository;
 use tlog::db::project_repository::ProjectRepository;
-use tlog::tui::app::TerminalUserInterface;
+use tlog::tui::terminal_user_interface::TerminalUserInterface;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let database = Database::new()?;
     database.init()?;
-    
+
     let project_repository = ProjectRepository::new(database.connection());
     let event_repository = EventRepository::new(database.connection());
 
     let cli = Cli::parse();
 
     let Some(command) = cli.command else {
-        let tui = TerminalUserInterface::default();
+        let tui = TerminalUserInterface;
         ratatui::run(|terminal| tui.launch(terminal))?;
         return Ok(());
     };
@@ -84,17 +84,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 date,
                 today,
             } => {
-                let query_date: Option<String>;
-                if today {
+                let query_date: Option<String> = if today {
                     let now = OffsetDateTime::now_utc();
-
                     let format = format_description!("[year]-[month]-[day]");
                     let date_str = now.format(&format)?;
 
-                    query_date = Some(date_str);
+                    Some(date_str)
                 } else {
-                    query_date = date;
-                }
+                    date
+                };
 
                 event_repository.for_each_session(
                     project_id,
