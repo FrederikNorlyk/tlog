@@ -80,6 +80,7 @@ pub trait Repository<'a> {
     fn initialize_schema(connection: &'a Connection) -> rusqlite::Result<()>;
 }
 
+// TODO: Use derives from thiserror
 #[derive(Debug)]
 pub enum DatabaseError {
     MissingDataDirectory,

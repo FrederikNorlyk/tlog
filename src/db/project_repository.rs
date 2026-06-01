@@ -1,6 +1,6 @@
 use crate::db::database::Repository;
 use crate::model::project::Project;
-use rusqlite::{Connection, OptionalExtension, Result, named_params, Row};
+use rusqlite::{Connection, OptionalExtension, Result, Row, named_params};
 
 pub struct ProjectRepository<'a> {
     connection: &'a Connection,
@@ -121,6 +121,178 @@ impl<'a> Repository<'a> for ProjectRepository<'a> {
             )",
             (),
         )?;
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::database::Database;
+
+    struct TestContext {
+        database: Database,
+    }
+
+    impl TestContext {
+        fn new() -> Result<Self> {
+            let database = Database::new_in_memory_db()?;
+            database.init().expect("Failed to initialize database");
+
+            Ok(Self { database })
+        }
+
+        fn project_repository(&self) -> ProjectRepository<'_> {
+            ProjectRepository::new(self.database.connection())
+        }
+    }
+
+    #[test]
+    fn test_insert() -> Result<()> {
+        let context = TestContext::new()?;
+        let project_repository = context.project_repository();
+
+        project_repository.insert("Just a name", None)?;
+        project_repository.insert("Has a desc", Some("Desc here"))?;
+
+        let project_1 = project_repository
+            .get(1)?
+            .expect("Should have found project 1");
+
+        assert_eq!(project_1.id, 1);
+        assert_eq!(project_1.name, "Just a name");
+        assert_eq!(project_1.description, None);
+
+        let project_2 = project_repository
+            .get(2)?
+            .expect("Should have found project 2");
+
+        assert_eq!(project_2.id, 2);
+        assert_eq!(project_2.name, "Has a desc");
+
+        assert_eq!(
+            project_2
+                .description
+                .expect("Project 2 should have a description"),
+            "Desc here"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_invalid_values_fails() -> Result<()> {
+        let context = TestContext::new()?;
+        let project_repository = context.project_repository();
+
+        assert!(project_repository.insert("", None).is_err());
+        assert!(project_repository.insert("   ", None).is_err());
+
+        assert!(project_repository.insert("Valid name", Some("")).is_err());
+
+        assert!(
+            project_repository
+                .insert("Valid name", Some("   "))
+                .is_err()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update() -> Result<()> {
+        let context = TestContext::new()?;
+        let project_repository = context.project_repository();
+
+        project_repository.insert("Original", Some("Original desc"))?;
+
+        let mut project = project_repository.get(1)?.expect("Project should exist");
+
+        project.name = "Updated".to_string();
+        project.description = Some("Updated desc".to_string());
+
+        project_repository.update(&project)?;
+
+        let updated = project_repository
+            .get(1)?
+            .expect("Project should still exist");
+
+        assert_eq!(updated.name, "Updated");
+        assert_eq!(updated.description.as_deref(), Some("Updated desc"));
+
+        let mut project = updated;
+        project.description = None;
+
+        project_repository.update(&project)?;
+
+        let updated = project_repository
+            .get(1)?
+            .expect("Project should still exist");
+
+        assert_eq!(updated.name, "Updated");
+        assert_eq!(updated.description, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_existing_project() -> Result<()> {
+        let context = TestContext::new()?;
+        let project_repository = context.project_repository();
+
+        project_repository.insert("Project", None)?;
+
+        assert!(project_repository.get(1)?.is_some());
+
+        assert!(project_repository.delete(1)?);
+
+        assert!(project_repository.get(1)?.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_non_existing_project() -> Result<()> {
+        let context = TestContext::new()?;
+        let project_repository = context.project_repository();
+
+        assert!(!project_repository.delete(999)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_non_existing_project() -> Result<()> {
+        let context = TestContext::new()?;
+        let project_repository = context.project_repository();
+
+        assert!(project_repository.get(999)?.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_for_each() -> Result<()> {
+        let context = TestContext::new()?;
+        let project_repository = context.project_repository();
+
+        project_repository.insert("Project A", None)?;
+        project_repository.insert("Project B", Some("Desc"))?;
+        project_repository.insert("Project C", None)?;
+
+        let mut projects = Vec::new();
+
+        project_repository.for_each(|project| {
+            projects.push(project);
+            Ok(())
+        })?;
+
+        assert_eq!(projects.len(), 3);
+
+        assert_eq!(projects[0].name, "Project A");
+        assert_eq!(projects[1].name, "Project B");
+        assert_eq!(projects[2].name, "Project C");
 
         Ok(())
     }

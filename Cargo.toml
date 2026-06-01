@@ -23,3 +23,4 @@ directories = "6.0.0"
 ratatui = "0.30.0"
 crossterm = "0.29.0"
 time = { version = "0.3.47", features = ["local-offset", "macros", "formatting"] }
+thiserror = "2.0.18"

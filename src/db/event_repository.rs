@@ -2,6 +2,7 @@ use crate::db::database::Repository;
 use crate::model::event::{Event, EventType};
 use crate::model::session::Session;
 use rusqlite::{Connection, OptionalExtension, Result, Row, named_params};
+use time::Date;
 
 pub struct EventRepository<'a> {
     connection: &'a Connection,
@@ -46,6 +47,26 @@ impl<'a> EventRepository<'a> {
         Ok(deleted_count > 0)
     }
 
+    /// Deletes all events for the given project on the given date.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `SQLite` fails to execute the delete statement, for
+    /// example because the database connection is invalid or the `event` table
+    /// does not exist.
+    pub fn delete_all_in(&self, project_id: i32, date: Date) -> Result<bool> {
+        let deleted_count = self.connection.execute(
+            "DELETE FROM event
+            WHERE
+                project_id = :project_id AND
+                timestamp >= unixepoch(:date) AND
+                timestamp < unixepoch(:date, '+1 day')",
+            named_params! {":project_id": project_id, ":date": date.to_string()},
+        )?;
+
+        Ok(deleted_count > 0)
+    }
+
     /// Gets the event with the given ID.
     ///
     /// # Errors
@@ -61,6 +82,59 @@ impl<'a> EventRepository<'a> {
                 Self::event_from_row,
             )
             .optional()
+    }
+
+    /// Returns whether the given project currently has an active start event.
+    ///
+    /// A project is considered active if its latest event is a `Start` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying `SQLite` query fails.
+    pub fn has_started_event(&self, project_id: i32) -> Result<bool> {
+        let exists: bool = self.connection.query_row(
+            "SELECT EXISTS(
+            SELECT 1
+            FROM event e
+            INNER JOIN (
+                SELECT project_id, MAX(timestamp) AS max_timestamp
+                FROM event
+                GROUP BY project_id
+            ) latest
+                ON e.project_id = latest.project_id
+                AND e.timestamp = latest.max_timestamp
+            WHERE e.project_id = :project_id
+              AND e.event_type = :start_event_type
+        )",
+            named_params! {
+                ":project_id": project_id,
+                ":start_event_type": EventType::START_CODE,
+            },
+            |row| row.get(0),
+        )?;
+
+        Ok(exists)
+    }
+
+    /// Calls the provided function once for each event in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if preparing or executing the query fails, or if a row
+    /// cannot be converted into an [`Event`].
+    pub fn for_each<F>(&self, mut f: F) -> Result<()>
+    where
+        F: FnMut(Event) -> Result<()>,
+    {
+        let mut stmt = self.connection.prepare("SELECT * FROM event")?;
+
+        let rows = stmt.query_map([], Self::event_from_row)?;
+
+        for event in rows {
+            f(event?)?;
+        }
+
+        Ok(())
     }
 
     /// Calls the provided function once for each latest started event per project.
@@ -249,6 +323,7 @@ mod tests {
     use crate::db::database::Database;
     use crate::db::project_repository::ProjectRepository;
     use crate::model::event::EventType::{Start, Stop};
+    use time::{Month, PrimitiveDateTime, Time};
 
     struct TestContext {
         database: Database,
@@ -287,9 +362,18 @@ mod tests {
         Ok(sessions)
     }
 
-    fn collect_started_events(
-        repository: &EventRepository<'_>,
-    ) -> Result<Vec<crate::model::event::Event>> {
+    fn collect_events(repository: &EventRepository) -> Result<Vec<Event>> {
+        let mut events = Vec::new();
+
+        repository.for_each(|event| {
+            events.push(event);
+            Ok(())
+        })?;
+
+        Ok(events)
+    }
+
+    fn collect_started_events(repository: &EventRepository<'_>) -> Result<Vec<Event>> {
         let mut events = Vec::new();
 
         repository.for_each_started_event(|event| {
@@ -368,6 +452,75 @@ mod tests {
         let deleted = event_repository.delete(999)?;
 
         assert!(!deleted);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_all_in() -> Result<(), Box<dyn std::error::Error>> {
+        let context = TestContext::new()?;
+        let event_repository = context.event_repository();
+
+        let start_date = Date::from_calendar_date(2024, Month::September, 20)?;
+        let time = Time::from_hms(2, 30, 00)?;
+
+        let mut timestamp = PrimitiveDateTime::new(start_date, time)
+            .assume_utc()
+            .unix_timestamp();
+
+        event_repository.insert(1, Start, timestamp)?;
+        timestamp += 500;
+        event_repository.insert(1, Stop, timestamp)?;
+        timestamp += 500;
+        event_repository.insert(2, Start, timestamp)?;
+        timestamp += 500;
+        event_repository.insert(2, Stop, timestamp)?;
+
+        let mut did_delete = event_repository.delete_all_in(1, start_date)?;
+
+        assert!(did_delete);
+
+        let mut events = collect_events(&event_repository)?;
+
+        assert_eq!(events.len(), 2);
+
+        for event in events {
+            assert_eq!(event.project_id, 2);
+        }
+
+        let next_date = Date::from_calendar_date(2024, Month::September, 21)?;
+
+        let mut next_date_timestamp = PrimitiveDateTime::new(next_date, time)
+            .assume_utc()
+            .unix_timestamp();
+
+        // Event with id 5
+        event_repository.insert(2, Start, next_date_timestamp)?;
+
+        next_date_timestamp += 500;
+
+        // Event with id 6
+        event_repository.insert(2, Stop, next_date_timestamp)?;
+
+        did_delete = event_repository.delete_all_in(2, start_date)?;
+
+        assert!(did_delete);
+
+        events = collect_events(&event_repository)?;
+
+        assert_eq!(events.len(), 2);
+
+        let start_event = events.first().expect("Could not get event");
+        assert_eq!(start_event.id, 5);
+        assert_eq!(start_event.project_id, 2);
+        assert_eq!(start_event.event_type, Start);
+        assert_eq!(start_event.timestamp, 1_726_885_800);
+
+        let end_event = events.get(1).expect("Could not get event");
+        assert_eq!(end_event.id, 6);
+        assert_eq!(end_event.project_id, 2);
+        assert_eq!(end_event.event_type, Stop);
+        assert_eq!(end_event.timestamp, 1_726_886_300);
 
         Ok(())
     }
