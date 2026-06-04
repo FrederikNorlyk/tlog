@@ -9,6 +9,24 @@ pub struct Event {
     pub timestamp: i64,
 }
 
+impl Event {
+    /// Converts a database row into an `Event`.
+    ///
+    /// Expects the row to contain columns: `id`, `project_id`, `event_type`, `timestamp`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any column is missing or cannot be converted.
+    pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
+        Ok(Event {
+            id: row.get("id")?,
+            project_id: row.get("project_id")?,
+            event_type: row.get("event_type")?,
+            timestamp: row.get("timestamp")?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventType {
     Start,

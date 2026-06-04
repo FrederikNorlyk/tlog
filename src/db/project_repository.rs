@@ -1,6 +1,6 @@
 use crate::db::database::Repository;
 use crate::model::project::Project;
-use rusqlite::{Connection, OptionalExtension, Result, Row, named_params};
+use rusqlite::{Connection, OptionalExtension, Result, Row, named_params, params_from_iter};
 
 pub struct ProjectRepository<'a> {
     connection: &'a Connection,
@@ -19,13 +19,13 @@ impl<'a> ProjectRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the insert statement, for
     /// example because the database connection is invalid, the `project` table
     /// does not exist, or the provided data violates a database constraint.
-    pub fn insert(&self, name: &str, description: Option<&str>) -> Result<()> {
+    pub fn insert(&self, name: &str, description: Option<&str>) -> Result<i64> {
         self.connection.execute(
             "INSERT INTO project (name, description) VALUES (:name, :description)",
             named_params! {":name": name, ":description": description},
         )?;
-
-        Ok(())
+        
+        Ok(self.connection.last_insert_rowid())
     }
 
     /// Updates an existing project.
@@ -81,6 +81,29 @@ impl<'a> ProjectRepository<'a> {
             .optional()
     }
 
+    /// Returns all projects matching the given IDs.
+    ///
+    /// # Errors
+    ///
+    /// Returns database errors from query execution or row mapping.
+    pub fn find_by_ids(&self, ids: &[i32]) -> Result<Vec<Project>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!("SELECT id, name, description FROM project WHERE id IN ({placeholders})");
+
+        let mut statement = self.connection.prepare(&sql)?;
+
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+
+        let rows = statement.query_map(params_from_iter(params), Self::project_from_row)?;
+
+        rows.collect()
+    }
+
     /// Calls the provided function once for each project in the database.
     ///
     /// # Errors
@@ -116,7 +139,7 @@ impl<'a> Repository<'a> for ProjectRepository<'a> {
         connection.execute(
             "CREATE TABLE IF NOT EXISTS project (
                 id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL CHECK(length(trim(name)) > 0),
+                name TEXT NOT NULL COLLATE NOCASE UNIQUE CHECK(length(trim(name)) > 0),
                 description TEXT CHECK(description IS NULL OR length(trim(description)) > 0)
             )",
             (),
@@ -129,32 +152,18 @@ impl<'a> Repository<'a> for ProjectRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::database::Database;
-
-    struct TestContext {
-        database: Database,
-    }
-
-    impl TestContext {
-        fn new() -> Result<Self> {
-            let database = Database::new_in_memory_db()?;
-            database.init().expect("Failed to initialize database");
-
-            Ok(Self { database })
-        }
-
-        fn project_repository(&self) -> ProjectRepository<'_> {
-            ProjectRepository::new(self.database.connection())
-        }
-    }
+    use crate::db::test_utils::DBTestContext;
 
     #[test]
     fn test_insert() -> Result<()> {
-        let context = TestContext::new()?;
-        let project_repository = context.project_repository();
+        let context = DBTestContext::new()?;
+        let project_repository = ProjectRepository::new(context.connection());
 
-        project_repository.insert("Just a name", None)?;
-        project_repository.insert("Has a desc", Some("Desc here"))?;
+        let id = project_repository.insert("Just a name", None)?;
+        assert_eq!(id, 1);
+
+        let id = project_repository.insert("Has a desc", Some("Desc here"))?;
+        assert_eq!(id, 2);
 
         let project_1 = project_repository
             .get(1)?
@@ -183,8 +192,8 @@ mod tests {
 
     #[test]
     fn test_insert_invalid_values_fails() -> Result<()> {
-        let context = TestContext::new()?;
-        let project_repository = context.project_repository();
+        let context = DBTestContext::new()?;
+        let project_repository = ProjectRepository::new(context.connection());
 
         assert!(project_repository.insert("", None).is_err());
         assert!(project_repository.insert("   ", None).is_err());
@@ -197,13 +206,16 @@ mod tests {
                 .is_err()
         );
 
+        assert!(!project_repository.insert("Some name", None).is_err());
+        assert!(project_repository.insert("Some name", None).is_err());
+
         Ok(())
     }
 
     #[test]
     fn test_update() -> Result<()> {
-        let context = TestContext::new()?;
-        let project_repository = context.project_repository();
+        let context = DBTestContext::new()?;
+        let project_repository = ProjectRepository::new(context.connection());
 
         project_repository.insert("Original", Some("Original desc"))?;
 
@@ -238,8 +250,8 @@ mod tests {
 
     #[test]
     fn test_delete_existing_project() -> Result<()> {
-        let context = TestContext::new()?;
-        let project_repository = context.project_repository();
+        let context = DBTestContext::new()?;
+        let project_repository = ProjectRepository::new(context.connection());
 
         project_repository.insert("Project", None)?;
 
@@ -254,8 +266,8 @@ mod tests {
 
     #[test]
     fn test_delete_non_existing_project() -> Result<()> {
-        let context = TestContext::new()?;
-        let project_repository = context.project_repository();
+        let context = DBTestContext::new()?;
+        let project_repository = ProjectRepository::new(context.connection());
 
         assert!(!project_repository.delete(999)?);
 
@@ -264,8 +276,8 @@ mod tests {
 
     #[test]
     fn test_get_non_existing_project() -> Result<()> {
-        let context = TestContext::new()?;
-        let project_repository = context.project_repository();
+        let context = DBTestContext::new()?;
+        let project_repository = ProjectRepository::new(context.connection());
 
         assert!(project_repository.get(999)?.is_none());
 
@@ -274,8 +286,8 @@ mod tests {
 
     #[test]
     fn test_for_each() -> Result<()> {
-        let context = TestContext::new()?;
-        let project_repository = context.project_repository();
+        let context = DBTestContext::new()?;
+        let project_repository = ProjectRepository::new(context.connection());
 
         project_repository.insert("Project A", None)?;
         project_repository.insert("Project B", Some("Desc"))?;

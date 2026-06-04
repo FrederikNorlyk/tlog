@@ -1,9 +1,12 @@
+use crate::model::project::Project;
+use crate::util::format_util::FormatUtil;
 use std::fmt;
 use std::fmt::Formatter;
 
 pub struct Session {
-    pub project_id: i32,
+    pub project: Project,
     pub total_seconds: i64,
+    pub is_started: bool,
 }
 
 impl fmt::Display for Session {
@@ -12,14 +15,14 @@ impl fmt::Display for Session {
         const BOLD: &str = "\x1b[1m";
         const RESET: &str = "\x1b[0m";
 
-        let project_id = self.project_id;
-        let total_seconds = &self.total_seconds;
+        let project = &self.project;
+        let (hours, minutes, seconds) = FormatUtil::seconds_to_hms(self.total_seconds);
+
+        let running_symbol = if self.is_started { "*" } else { "" };
 
         write!(
             f,
-            "{LIGHT_GRAY}{project_id:>2}{RESET}  {BOLD}{total_seconds}{RESET}"
-        )?;
-
-        Ok(())
+            "{BOLD}{hours:02}:{minutes:02}:{seconds:02}{running_symbol:>1}{RESET}  {LIGHT_GRAY}{project}{RESET}",
+        )
     }
 }

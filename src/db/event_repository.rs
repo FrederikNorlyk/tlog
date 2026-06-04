@@ -1,7 +1,6 @@
 use crate::db::database::Repository;
 use crate::model::event::{Event, EventType};
-use crate::model::session::Session;
-use rusqlite::{Connection, OptionalExtension, Result, Row, named_params};
+use rusqlite::{Connection, OptionalExtension, Result, named_params};
 use time::Date;
 
 pub struct EventRepository<'a> {
@@ -79,7 +78,7 @@ impl<'a> EventRepository<'a> {
             .query_row(
                 "SELECT id, project_id, event_type, timestamp FROM event WHERE id = :id",
                 named_params! {":id": id},
-                Self::event_from_row,
+                Event::from_row,
             )
             .optional()
     }
@@ -116,22 +115,34 @@ impl<'a> EventRepository<'a> {
         Ok(exists)
     }
 
-    /// Calls the provided function once for each event in the database.
+    /// Iterates over all events for a given date in chronological order.
+    ///
+    /// Events are streamed (not collected) and passed one-by-one to the provided callback.
+    ///
+    /// # Behavior
+    ///
+    /// - Only events within the given calendar date are included
+    /// - Results are ordered by timestamp ascending
+    /// - Events are not buffered in memory beyond iteration
     ///
     /// # Errors
     ///
-    /// Returns an error if preparing or executing the query fails, or if a row
-    /// cannot be converted into an [`Event`].
-    pub fn for_each<F>(&self, mut f: F) -> Result<()>
+    /// Returns an error if the query fails or row mapping fails.
+    pub fn for_each<F>(&self, date: Date, mut consumer: F) -> Result<()>
     where
-        F: FnMut(Event) -> Result<()>,
+        F: FnMut(Event),
     {
-        let mut stmt = self.connection.prepare("SELECT * FROM event")?;
+        let mut statement = self.connection.prepare(
+            "SELECT * FROM event
+            WHERE timestamp >= unixepoch(:date) AND timestamp < unixepoch(:date, '+1 day')
+            ORDER BY timestamp",
+        )?;
 
-        let rows = stmt.query_map([], Self::event_from_row)?;
+        let rows =
+            statement.query_map(named_params! {":date": date.to_string()}, Event::from_row)?;
 
         for event in rows {
-            f(event?)?;
+            consumer(event?);
         }
 
         Ok(())
@@ -145,12 +156,9 @@ impl<'a> EventRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if preparing or executing the query fails, if a returned row
-    /// cannot be converted into an [`Event`], or if the provided callback returns an
+    /// cannot be converted into an [`Event`], or if the provided consumer returns an
     /// error.
-    pub fn for_each_started_event<F>(&self, mut callback: F) -> Result<()>
-    where
-        F: FnMut(Event) -> Result<()>,
-    {
+    pub fn get_started_event(&self) -> Result<Option<Event>> {
         let mut statement = self.connection.prepare(
             "SELECT e.id, e.project_id, e.event_type, e.timestamp
             FROM event e
@@ -161,128 +169,17 @@ impl<'a> EventRepository<'a> {
             ) latest
                 ON e.project_id = latest.project_id
                 AND e.timestamp = latest.max_timestamp
-            WHERE e.event_type = :start_event_type",
+            WHERE e.event_type = :start_event_type
+            LIMIT 1",
         )?;
 
-        let rows = statement.query_map(
-            named_params! {":start_event_type": EventType::START_CODE},
-            Self::event_from_row,
-        )?;
+        let mut rows =
+            statement.query(named_params! {":start_event_type": EventType::START_CODE})?;
 
-        for event in rows {
-            callback(event?)?;
+        match rows.next()? {
+            Some(row) => Ok(Some(Event::from_row(row)?)),
+            None => Ok(None),
         }
-
-        Ok(())
-    }
-
-    fn event_from_row(row: &Row<'_>) -> Result<Event> {
-        Ok(Event {
-            id: row.get("id")?,
-            project_id: row.get("project_id")?,
-            event_type: row.get("event_type")?,
-            timestamp: row.get("timestamp")?,
-        })
-    }
-
-    /// Calls the provided function once for each project duration matching the optional filters.
-    ///
-    /// If `date` is provided, it must be in `YYYY-MM-DD` format.
-    ///
-    /// The date filter counts only the part of each session that overlaps that day.
-    /// For example, a session from `2026-01-25 23:30` to `2026-01-26 01:00`
-    /// contributes one hour to `2026-01-26`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if preparing or executing the query fails, or if a returned
-    /// row cannot be converted into a [`ProjectDuration`].
-    pub fn for_each_session<F>(
-        &self,
-        project_id: Option<i32>,
-        date: Option<&str>,
-        mut callback: F,
-    ) -> Result<()>
-    where
-        F: FnMut(Session) -> Result<()>,
-    {
-        let mut statement = self.connection.prepare(
-            "WITH bounds AS (
-                SELECT
-                    CASE
-                        WHEN :date IS NULL THEN NULL
-                        ELSE unixepoch(:date)
-                    END AS day_start,
-                    CASE
-                        WHEN :date IS NULL THEN NULL
-                        ELSE unixepoch(:date, '+1 day')
-                    END AS day_end
-            ),
-            sessions AS (
-                SELECT
-                    start_event.project_id,
-                    start_event.timestamp AS start_timestamp,
-                    (
-                        SELECT MIN(stop_event.timestamp)
-                        FROM event stop_event
-                        WHERE stop_event.project_id = start_event.project_id
-                          AND stop_event.event_type = :stop_event_type
-                          AND stop_event.timestamp > start_event.timestamp
-                    ) AS stop_timestamp
-                FROM event start_event
-                WHERE start_event.event_type = :start_event_type
-            ),
-            bounded_sessions AS (
-                SELECT
-                    sessions.project_id,
-                    CASE
-                        WHEN bounds.day_start IS NULL THEN sessions.start_timestamp
-                        ELSE MAX(sessions.start_timestamp, bounds.day_start)
-                    END AS bounded_start,
-                    CASE
-                        WHEN bounds.day_end IS NULL THEN sessions.stop_timestamp
-                        ELSE MIN(sessions.stop_timestamp, bounds.day_end)
-                    END AS bounded_stop
-                FROM sessions
-                CROSS JOIN bounds
-                WHERE sessions.stop_timestamp IS NOT NULL
-                  AND (:project_id IS NULL OR sessions.project_id = :project_id)
-                  AND (
-                      bounds.day_start IS NULL
-                      OR (
-                          sessions.start_timestamp < bounds.day_end
-                          AND sessions.stop_timestamp > bounds.day_start
-                      )
-                  )
-            )
-            SELECT
-                project_id,
-                COALESCE(SUM(bounded_stop - bounded_start), 0) AS total_seconds
-            FROM bounded_sessions
-            GROUP BY project_id
-            ORDER BY project_id",
-        )?;
-
-        let rows = statement.query_map(
-            named_params! {
-                ":project_id": project_id,
-                ":date": date,
-                ":start_event_type": EventType::START_CODE,
-                ":stop_event_type": EventType::STOP_CODE,
-            },
-            |row| {
-                Ok(Session {
-                    project_id: row.get("project_id")?,
-                    total_seconds: row.get("total_seconds")?,
-                })
-            },
-        )?;
-
-        for duration in rows {
-            callback(duration?)?;
-        }
-
-        Ok(())
     }
 }
 
@@ -320,85 +217,27 @@ impl<'a> Repository<'a> for EventRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::database::Database;
     use crate::db::project_repository::ProjectRepository;
+    use crate::db::test_utils::DBTestContext;
     use crate::model::event::EventType::{Start, Stop};
+    use std::error::Error;
     use time::{Month, PrimitiveDateTime, Time};
 
-    struct TestContext {
-        database: Database,
-    }
+    fn initialize_context() -> Result<DBTestContext> {
+        let context = DBTestContext::new()?;
+        let project_repository = ProjectRepository::new(context.connection());
 
-    impl TestContext {
-        fn new() -> Result<Self> {
-            let database = Database::new_in_memory_db()?;
-            database.init().expect("Failed to initialize database");
+        project_repository.insert("Test name", None)?;
+        project_repository.insert("Another project", None)?;
+        project_repository.insert("Third project", None)?;
 
-            let project_repository = ProjectRepository::new(database.connection());
-            project_repository.insert("Test name", None)?;
-            project_repository.insert("Another project", None)?;
-            project_repository.insert("Third project", None)?;
-
-            Ok(Self { database })
-        }
-
-        fn event_repository(&self) -> EventRepository<'_> {
-            EventRepository::new(self.database.connection())
-        }
-    }
-
-    fn collect_sessions(
-        repository: &EventRepository<'_>,
-        project_id: Option<i32>,
-        date: Option<&str>,
-    ) -> Result<Vec<Session>> {
-        let mut sessions = Vec::new();
-
-        repository.for_each_session(project_id, date, |session| {
-            sessions.push(session);
-            Ok(())
-        })?;
-
-        Ok(sessions)
-    }
-
-    fn collect_events(repository: &EventRepository) -> Result<Vec<Event>> {
-        let mut events = Vec::new();
-
-        repository.for_each(|event| {
-            events.push(event);
-            Ok(())
-        })?;
-
-        Ok(events)
-    }
-
-    fn collect_started_events(repository: &EventRepository<'_>) -> Result<Vec<Event>> {
-        let mut events = Vec::new();
-
-        repository.for_each_started_event(|event| {
-            events.push(event);
-            Ok(())
-        })?;
-
-        Ok(events)
-    }
-
-    fn assert_single_session(
-        sessions: &[Session],
-        expected_project_id: i32,
-        expected_total_seconds: i64,
-    ) {
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].project_id, expected_project_id);
-        assert_eq!(sessions[0].total_seconds, expected_total_seconds);
+        Ok(context)
     }
 
     #[test]
     fn test_insert_and_get_event() -> Result<()> {
-        let context = TestContext::new()?;
-        let event_repository = context.event_repository();
-
+        let context = initialize_context()?;
+        let event_repository = EventRepository::new(context.connection());
         let timestamp = 1_780_140_094;
 
         event_repository.insert(1, Start, timestamp)?;
@@ -417,8 +256,8 @@ mod tests {
 
     #[test]
     fn test_get_missing_event_returns_none() -> Result<()> {
-        let context = TestContext::new()?;
-        let event_repository = context.event_repository();
+        let context = initialize_context()?;
+        let event_repository = EventRepository::new(context.connection());
 
         let event = event_repository.get(999)?;
 
@@ -429,8 +268,8 @@ mod tests {
 
     #[test]
     fn test_delete_event() -> Result<()> {
-        let context = TestContext::new()?;
-        let event_repository = context.event_repository();
+        let context = initialize_context()?;
+        let event_repository = EventRepository::new(context.connection());
 
         event_repository.insert(1, Start, 1_780_140_094)?;
 
@@ -446,8 +285,8 @@ mod tests {
 
     #[test]
     fn test_delete_missing_event_returns_false() -> Result<()> {
-        let context = TestContext::new()?;
-        let event_repository = context.event_repository();
+        let context = initialize_context()?;
+        let event_repository = EventRepository::new(context.connection());
 
         let deleted = event_repository.delete(999)?;
 
@@ -457,9 +296,9 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_all_in() -> Result<(), Box<dyn std::error::Error>> {
-        let context = TestContext::new()?;
-        let event_repository = context.event_repository();
+    fn test_delete_all_in() -> Result<(), Box<dyn Error>> {
+        let context = initialize_context()?;
+        let event_repository = EventRepository::new(context.connection());
 
         let start_date = Date::from_calendar_date(2024, Month::September, 20)?;
         let time = Time::from_hms(2, 30, 00)?;
@@ -480,7 +319,7 @@ mod tests {
 
         assert!(did_delete);
 
-        let mut events = collect_events(&event_repository)?;
+        let events = context.collect_events()?;
 
         assert_eq!(events.len(), 2);
 
@@ -506,7 +345,7 @@ mod tests {
 
         assert!(did_delete);
 
-        events = collect_events(&event_repository)?;
+        let events = context.collect_events()?;
 
         assert_eq!(events.len(), 2);
 
@@ -527,8 +366,8 @@ mod tests {
 
     #[test]
     fn test_for_each_started_event_returns_projects_with_latest_start_event() -> Result<()> {
-        let context = TestContext::new()?;
-        let event_repository = context.event_repository();
+        let context = initialize_context()?;
+        let event_repository = EventRepository::new(context.connection());
 
         let mut timestamp = 1_780_140_094;
 
@@ -539,146 +378,21 @@ mod tests {
         timestamp += 700;
         event_repository.insert(2, Start, timestamp)?;
 
-        let started_events = collect_started_events(&event_repository)?;
+        let started_event = event_repository
+            .get_started_event()?
+            .expect("expected a started event");
 
-        assert_eq!(started_events.len(), 1);
-        assert_eq!(started_events[0].project_id, 2);
-        assert!(matches!(started_events[0].event_type, Start));
-        assert_eq!(started_events[0].timestamp, timestamp);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_for_each_started_event_uses_latest_event_per_project() -> Result<()> {
-        let context = TestContext::new()?;
-        let event_repository = context.event_repository();
-
-        let mut timestamp = 1_780_140_094;
-
-        event_repository.insert(1, Start, timestamp)?;
-        timestamp += 300;
-        event_repository.insert(1, Stop, timestamp)?;
-
-        timestamp += 700;
-        event_repository.insert(1, Start, timestamp)?;
-        let expected_project_1_start_timestamp = timestamp;
-
-        timestamp += 300;
-        event_repository.insert(2, Start, timestamp)?;
-        timestamp += 300;
-        event_repository.insert(2, Stop, timestamp)?;
-
-        timestamp += 400;
-        event_repository.insert(3, Start, timestamp)?;
-        let expected_project_3_start_timestamp = timestamp;
-
-        let started_events = collect_started_events(&event_repository)?;
-
-        let project_1_started_event = started_events
-            .iter()
-            .find(|event| event.project_id == 1)
-            .expect("project 1 started event should exist");
-
-        let project_3_started_event = started_events
-            .iter()
-            .find(|event| event.project_id == 3)
-            .expect("project 3 started event should exist");
-
-        assert_eq!(started_events.len(), 2);
-
-        assert!(matches!(project_1_started_event.event_type, Start));
-        assert_eq!(
-            project_1_started_event.timestamp,
-            expected_project_1_start_timestamp
-        );
-
-        assert!(matches!(project_3_started_event.event_type, Start));
-        assert_eq!(
-            project_3_started_event.timestamp,
-            expected_project_3_start_timestamp
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_session_duration_can_be_filtered_by_date() -> Result<()> {
-        let context = TestContext::new()?;
-        let event_repository = context.event_repository();
-
-        let mut timestamp = 1_767_308_400;
-
-        event_repository.insert(1, Start, timestamp)?;
-        timestamp += 7200;
-        event_repository.insert(1, Stop, timestamp)?;
-
-        let sessions = collect_sessions(&event_repository, Some(1), Some("2026-01-01"))?;
-        assert_single_session(&sessions, 1, 3600);
-
-        let sessions = collect_sessions(&event_repository, Some(1), Some("2026-01-02"))?;
-        assert_single_session(&sessions, 1, 3600);
-
-        let sessions = collect_sessions(&event_repository, Some(1), Some("2026-01-03"))?;
-        assert!(sessions.is_empty());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_session_duration_calculation() -> Result<()> {
-        let context = TestContext::new()?;
-        let event_repository = context.event_repository();
-
-        let mut timestamp = 1_780_140_094;
-
-        event_repository.insert(1, Start, timestamp)?;
-        timestamp += 300;
-        event_repository.insert(1, Stop, timestamp)?;
-
-        let sessions = collect_sessions(&event_repository, Some(1), None)?;
-        assert_single_session(&sessions, 1, 300);
-
-        // Calculation should not include time between sessions
-        timestamp += 4000;
-        event_repository.insert(1, Start, timestamp)?;
-
-        timestamp += 700;
-        event_repository.insert(1, Stop, timestamp)?;
-
-        let sessions = collect_sessions(&event_repository, Some(1), None)?;
-        assert_single_session(&sessions, 1, 1000);
-
-        event_repository.insert(2, Start, timestamp)?;
-        timestamp += 800;
-        event_repository.insert(2, Stop, timestamp)?;
-
-        let sessions = collect_sessions(&event_repository, Some(2), None)?;
-        assert_single_session(&sessions, 2, 800);
-
-        let sessions = collect_sessions(&event_repository, None, None)?;
-
-        let project_1_session = sessions
-            .iter()
-            .find(|session| session.project_id == 1)
-            .expect("project 1 session should exist");
-
-        let project_2_session = sessions
-            .iter()
-            .find(|session| session.project_id == 2)
-            .expect("project 2 session should exist");
-
-        assert_eq!(project_1_session.total_seconds, 1000);
-        assert_eq!(project_2_session.total_seconds, 800);
-        assert_eq!(sessions.len(), 2);
+        assert_eq!(started_event.project_id, 2);
+        assert!(matches!(started_event.event_type, Start));
+        assert_eq!(started_event.timestamp, timestamp);
 
         Ok(())
     }
 
     #[test]
     fn test_event_cannot_be_created_for_missing_project() -> Result<()> {
-        let context = TestContext::new()?;
-        let event_repository = context.event_repository();
+        let context = initialize_context()?;
+        let event_repository = EventRepository::new(context.connection());
 
         let result = event_repository.insert(999, Start, 1_780_140_094);
 
@@ -689,9 +403,9 @@ mod tests {
 
     #[test]
     fn test_deleting_project_deletes_its_events() -> Result<()> {
-        let context = TestContext::new()?;
-        let project_repository = ProjectRepository::new(context.database.connection());
-        let event_repository = context.event_repository();
+        let context = initialize_context()?;
+        let project_repository = ProjectRepository::new(context.connection());
+        let event_repository = EventRepository::new(context.connection());
 
         let mut timestamp = 1_780_140_094;
 
@@ -712,29 +426,6 @@ mod tests {
         assert!(event_repository.get(1)?.is_none());
         assert!(event_repository.get(2)?.is_none());
         assert!(event_repository.get(3)?.is_some());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_ongoing_session_not_included() -> Result<()> {
-        let context = TestContext::new()?;
-        let event_repository = context.event_repository();
-
-        let mut timestamp = 1_780_140_094;
-        event_repository.insert(1, Start, timestamp)?;
-
-        let sessions = collect_sessions(&event_repository, Some(1), None)?;
-        assert!(sessions.is_empty());
-
-        timestamp += 500;
-        event_repository.insert(1, Stop, timestamp)?;
-
-        timestamp += 5000;
-        event_repository.insert(1, Start, timestamp)?;
-
-        let sessions = collect_sessions(&event_repository, Some(1), None)?;
-        assert_single_session(&sessions, 1, 500);
 
         Ok(())
     }

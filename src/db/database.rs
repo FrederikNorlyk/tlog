@@ -1,11 +1,11 @@
 use crate::db::event_repository::EventRepository;
+use crate::db::manual_session_repository::ManualSessionRepository;
 use crate::db::project_repository::ProjectRepository;
 use directories::ProjectDirs;
 use rusqlite::Connection;
-use std::error::Error;
-use std::fmt::Formatter;
 use std::path::PathBuf;
-use std::{fmt, fs};
+use std::fs;
+use thiserror::Error;
 
 pub struct Database {
     connection: Connection,
@@ -66,6 +66,7 @@ impl Database {
     pub fn init(&self) -> Result<(), DatabaseError> {
         ProjectRepository::initialize_schema(self.connection())?;
         EventRepository::initialize_schema(self.connection())?;
+        ManualSessionRepository::initialize_schema(self.connection())?;
         Ok(())
     }
 }
@@ -80,44 +81,12 @@ pub trait Repository<'a> {
     fn initialize_schema(connection: &'a Connection) -> rusqlite::Result<()>;
 }
 
-// TODO: Use derives from thiserror
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum DatabaseError {
+    #[error("Could not determine application data directory")]
     MissingDataDirectory,
-    Io(std::io::Error),
-    Sqlite(rusqlite::Error),
-}
-
-impl Error for DatabaseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::MissingDataDirectory => None,
-            Self::Io(error) => Some(error),
-            Self::Sqlite(error) => Some(error),
-        }
-    }
-}
-
-impl fmt::Display for DatabaseError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingDataDirectory => {
-                write!(f, "Could not determine application data directory")
-            }
-            Self::Io(error) => write!(f, "I/O error: {error}"),
-            Self::Sqlite(error) => write!(f, "SQLite error: {error}"),
-        }
-    }
-}
-
-impl From<std::io::Error> for DatabaseError {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
-    }
-}
-
-impl From<rusqlite::Error> for DatabaseError {
-    fn from(value: rusqlite::Error) -> Self {
-        Self::Sqlite(value)
-    }
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
 }
