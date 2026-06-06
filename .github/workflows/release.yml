@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  release:
+    types: [ published ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build Release
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        include:
+          - os: ubuntu-latest
+            artifact_name: tlog
+            asset_name: tlog-linux
+
+          - os: windows-latest
+            artifact_name: tlog.exe
+            asset_name: tlog-windows.exe
+
+          - os: macos-latest
+            artifact_name: tlog
+            asset_name: tlog-macos
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Release
+        run: cargo build --release
+
+      - name: Upload Binaries
+        uses: softprops/action-gh-release@v3
+        with:
+          files: target/release/${{ matrix.artifact_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

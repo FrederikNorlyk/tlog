@@ -3,14 +3,14 @@ use std::fmt::Formatter;
 
 #[derive(Debug)]
 pub struct Project {
-    pub id: u32,
+    pub id: i32,
     pub name: String,
     pub description: Option<String>,
 }
 
 impl Project {
     #[must_use]
-    pub fn new(id: u32, name: &str, description: Option<&str>) -> Self {
+    pub fn new(id: i32, name: &str, description: Option<&str>) -> Self {
         Self {
             id,
             name: name.to_string(),
