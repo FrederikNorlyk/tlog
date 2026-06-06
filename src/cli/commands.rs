@@ -44,12 +44,8 @@ pub enum Command {
         project_id: i32,
 
         /// Date in YYYY-MM-DD format
-        #[arg(long, short = 'd', conflicts_with = "today", required_unless_present = "today", value_parser = parse_date)]
+        #[arg(long, short = 'd', value_parser = parse_date)]
         date: Option<Date>,
-
-        /// Use the current date instead of specifying a date explicitly
-        #[arg(long, conflicts_with = "date", required_unless_present = "today")]
-        today: bool,
 
         /// Time spent on the project, in the hh:mm format
         #[arg(long = "duration", value_parser = parse_duration)]

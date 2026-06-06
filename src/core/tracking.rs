@@ -34,7 +34,7 @@ impl<'a> Tracking<'a> {
 
         if let Some(started_event) = event_repository.get_started_event()? {
             event_repository.insert(started_event.project_id, EventType::Stop, timestamp)?;
-        };
+        }
 
         event_repository.insert(project_id, EventType::Start, timestamp)?;
 
@@ -57,6 +57,26 @@ impl<'a> Tracking<'a> {
         // TODO: Clamp within same date (if we have progressed to the next date, create new start stop events in that one.
 
         event_repository.insert(project_id, EventType::Stop, timestamp)?;
+
+        Ok(())
+    }
+
+    /// Explicitly sets time spent on a given project on a given date.
+    ///
+    /// The function deletes any existing events and creates a manual session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `SQLite` fails to execute the queries.
+    pub fn set(&self, project_id: i32, date: Date, total_seconds: i64) -> rusqlite::Result<()> {
+        let event_repository = EventRepository::new(self.connection);
+        let manual_session_repository = ManualSessionRepository::new(self.connection);
+
+        event_repository.delete_all_in(project_id, date)?;
+
+        // TODO: If a start event exists on the project on a previous date we need to handle it
+
+        manual_session_repository.upsert(project_id, date, total_seconds)?;
 
         Ok(())
     }
@@ -116,11 +136,6 @@ impl<'a> Tracking<'a> {
         let mut project_to_events: HashMap<i32, Vec<Event>> = HashMap::new();
 
         event_repository.for_each(date, |event| {
-            // Overwritten by a manual session
-            if project_to_primitive_sessions.contains_key(&event.project_id) {
-                return;
-            }
-
             project_to_events
                 .entry(event.project_id)
                 .or_default()
@@ -151,13 +166,17 @@ impl<'a> Tracking<'a> {
                 is_started = true;
             }
 
-            let session = PrimitiveSession {
-                project_id: *project_id,
-                total_seconds,
-                is_started,
-            };
-
-            project_to_primitive_sessions.insert(*project_id, session);
+            if let Some(session) = project_to_primitive_sessions.get_mut(project_id) {
+                session.total_seconds += total_seconds;
+                session.is_started = is_started;
+            } else {
+                let session = PrimitiveSession {
+                    project_id: *project_id,
+                    total_seconds,
+                    is_started,
+                };
+                project_to_primitive_sessions.insert(*project_id, session);
+            }
         }
 
         let project_ids: Vec<i32> = project_to_primitive_sessions.keys().copied().collect();
@@ -181,6 +200,8 @@ impl<'a> Tracking<'a> {
             });
         }
 
+        sessions.sort_by(|a, b| a.project.name.cmp(&b.project.name));
+
         Ok(sessions)
     }
 }
@@ -202,15 +223,17 @@ mod tests {
     use crate::db::test_utils::DBTestContext;
     use crate::model::event::EventType::{Start, Stop};
     use std::error::Error;
-    use time::{PrimitiveDateTime, Time};
+    use time::{OffsetDateTime, PrimitiveDateTime, Time};
 
     fn initialize_context() -> rusqlite::Result<DBTestContext> {
         let context = DBTestContext::new()?;
         let project_repository = ProjectRepository::new(context.connection());
 
-        project_repository.insert("First", None)?;
-        project_repository.insert("Second", Some("A desc"))?;
-        project_repository.insert("Third", None)?;
+        project_repository.insert("A", None)?;
+        project_repository.insert("B", Some("A desc"))?;
+        project_repository.insert("C", None)?;
+        project_repository.insert("D", None)?;
+        project_repository.insert("E", None)?;
 
         Ok(context)
     }
@@ -332,13 +355,22 @@ mod tests {
     }
 
     #[test]
-    fn list_all_sessions_combines_manual_and_event_sessions() -> Result<(), Box<dyn Error>> {
+    fn test_list_sessions() -> Result<(), Box<dyn Error>> {
         let context = initialize_context()?;
         let tracking = Tracking::new(context.connection());
         let event_repository = EventRepository::new(context.connection());
         let manual_session_repository = ManualSessionRepository::new(context.connection());
 
+        let now = OffsetDateTime::now_utc();
+        let today = now.date();
+        let today_timestamp = now.unix_timestamp();
+
         let date = Date::from_calendar_date(2026, time::Month::June, 3)?;
+        let time = Time::from_hms(10, 0, 0)?;
+
+        let mut timestamp = PrimitiveDateTime::new(date, time)
+            .assume_utc()
+            .unix_timestamp();
 
         // -------------------------
         // Manual session (project 1)
@@ -346,65 +378,189 @@ mod tests {
         manual_session_repository.upsert(1, date, 3600)?;
 
         // -------------------------
-        // Event session (project 2): 10s + 20s = 30s
+        // Event session (project 2)
         // -------------------------
+        event_repository.insert(2, Start, timestamp)?;
+        timestamp += 10;
+        event_repository.insert(2, Stop, timestamp)?;
+        timestamp += 10;
+        event_repository.insert(2, Start, timestamp)?;
+        timestamp += 10;
+        event_repository.insert(2, Stop, timestamp)?;
+
+        // -------------------------
+        // Combination of manual and event session (project 3)
+        // -------------------------
+        tracking.set(3, date, 1000)?;
+        event_repository.insert(3, Start, timestamp)?;
+        timestamp += 10;
+        event_repository.insert(3, Stop, timestamp)?;
+
+        // -------------------------
+        // Ongoing session (project 4): Start only
+        // -------------------------
+        event_repository.insert(4, Start, today_timestamp - 100)?;
+
+        // -------------------------
+        // Execute
+        // -------------------------
+        let sessions = tracking.list_all_sessions(date)?;
+        let today_sessions = tracking.list_all_sessions(today)?;
+
+        // -------------------------
+        // Assertions
+        // -------------------------
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(today_sessions.len(), 1);
+
+        // Project 1: manual session
+        let session = sessions.first().unwrap();
+        assert_eq!(session.project.id, 1);
+        assert_eq!(session.project.name, "A");
+        assert!(session.project.description.is_none());
+        assert_eq!(session.total_seconds, 3600);
+        assert!(!session.is_started);
+
+        // Project 2: event session
+        let session = sessions.get(1).unwrap();
+        assert_eq!(session.project.id, 2);
+        assert_eq!(session.project.name, "B");
+        assert_eq!(session.project.description, Some("A desc".to_string()));
+        assert_eq!(session.total_seconds, 20);
+        assert!(!session.is_started);
+
+        // Project 3: manual and event session
+        let session = sessions.get(2).unwrap();
+        assert_eq!(session.project.id, 3);
+        assert_eq!(session.project.name, "C");
+        assert!(session.project.description.is_none());
+        assert!(!session.is_started);
+        assert_eq!(1010, session.total_seconds);
+
+        // Ongoing sessions use current time, so we can't be 100% sure
+        let min_duration = 100;
+        // Should never take more than 10 seconds to execute the test
+        let max_duration = 110;
+
+        // Project 4: ongoing session (Start only)
+        let session = today_sessions.first().unwrap();
+        assert_eq!(session.project.id, 4);
+        assert_eq!(session.project.name, "D");
+        assert!(session.project.description.is_none());
+        assert!(session.is_started);
+
+        assert!(
+            session.total_seconds >= min_duration && session.total_seconds <= max_duration,
+            "total_seconds: {}",
+            session.total_seconds
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_session_combined_ongoing_and_manual_session() -> Result<(), Box<dyn Error>> {
+        let context = initialize_context()?;
+        let tracking = Tracking::new(context.connection());
+        let event_repository = EventRepository::new(context.connection());
+
+        let now = OffsetDateTime::now_utc();
+        let today = now.date();
+        let today_timestamp = now.unix_timestamp();
+
+        // -------------------------
+        // Combination of manual session and ongoing event session (project 5)
+        // -------------------------
+        tracking.set(5, today, 1000)?;
+        event_repository.insert(5, Start, today_timestamp - 100)?;
+
+        // -------------------------
+        // Execute
+        // -------------------------
+        let today_sessions = tracking.list_all_sessions(today)?;
+
+        // -------------------------
+        // Assertions
+        // -------------------------
+        assert_eq!(today_sessions.len(), 1);
+
+        // Ongoing sessions use current time, so we can't be 100% sure
+        let min_duration = 1100;
+        // Should never take more than 10 seconds to execute the test
+        let max_duration = 1110;
+
+        // Project 5: manual session + ongoing session
+        let session = today_sessions.first().unwrap();
+        assert_eq!(session.project.id, 5);
+        assert_eq!(session.project.name, "E");
+        assert!(session.project.description.is_none());
+        assert!(session.is_started);
+
+        assert!(
+            session.total_seconds >= min_duration && session.total_seconds <= max_duration,
+            "total_seconds: {}",
+            session.total_seconds
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_manual_session_deletes_events() -> Result<(), Box<dyn Error>> {
+        let context = initialize_context()?;
+        let tracking = Tracking::new(context.connection());
+        let event_repository = EventRepository::new(context.connection());
+
+        let date = Date::from_calendar_date(2026, time::Month::June, 3)?;
         let time = Time::from_hms(10, 0, 0)?;
 
         let mut timestamp = PrimitiveDateTime::new(date, time)
             .assume_utc()
             .unix_timestamp();
 
+        // -------------------------
+        // Create start stop events for project 1 and 2
+        // -------------------------
+        event_repository.insert(1, Start, timestamp)?;
+        timestamp += 10;
+        event_repository.insert(1, Stop, timestamp)?;
+        timestamp += 1000;
         event_repository.insert(2, Start, timestamp)?;
-        timestamp += 10;
-        event_repository.insert(2, Stop, timestamp)?;
-        timestamp += 10;
-        event_repository.insert(2, Start, timestamp)?;
-        timestamp += 10;
+        timestamp += 50;
         event_repository.insert(2, Stop, timestamp)?;
 
         // -------------------------
-        // Ongoing session (project 3): Start only
-        // -------------------------
-        event_repository.insert(3, Start, timestamp + 100)?;
-
-        // -------------------------
-        // Execute
+        // Assert event based sessions duration
         // -------------------------
         let sessions = tracking.list_all_sessions(date)?;
+        assert_eq!(sessions.len(), 2);
+
+        let session = sessions.first().unwrap();
+        assert_eq!(session.project.id, 1);
+        assert_eq!(session.total_seconds, 10);
+
+        let session = sessions.get(1).unwrap();
+        assert_eq!(session.project.id, 2);
+        assert_eq!(session.total_seconds, 50);
 
         // -------------------------
-        // Assertions
+        // Manually set project 1 to 200 seconds
         // -------------------------
-        assert_eq!(sessions.len(), 3);
+        tracking.set(1, date, 200)?;
 
-        let mut map = sessions
-            .into_iter()
-            .map(|s| (s.project.id, s))
-            .collect::<HashMap<_, _>>();
+        // -------------------------
+        // Verify that project 1 is 200 seconds, and project 2 is still event based
+        // -------------------------
+        let sessions = tracking.list_all_sessions(date)?;
+        assert_eq!(sessions.len(), 2);
 
-        // Project 1: manual session
-        let s1 = map.remove(&1).unwrap();
-        assert_eq!(s1.project.id, 1);
-        assert_eq!(s1.project.name, "First");
-        assert!(s1.project.description.is_none());
-        assert_eq!(s1.total_seconds, 3600);
-        assert!(!s1.is_started);
+        let session = sessions.first().unwrap();
+        assert_eq!(session.project.id, 1);
+        assert_eq!(session.total_seconds, 200);
 
-        // Project 2: event session
-        let s2 = map.remove(&2).unwrap();
-        assert_eq!(s2.project.id, 2);
-        assert_eq!(s2.project.name, "Second");
-        assert_eq!(s2.project.description, Some("A desc".to_string()));
-        assert_eq!(s2.total_seconds, 20);
-        assert!(!s2.is_started);
-
-        // Project 3: ongoing session (Start only)
-        let s3 = map.remove(&3).unwrap();
-        assert_eq!(s3.project.id, 3);
-        assert_eq!(s3.project.name, "Third");
-        assert!(s3.project.description.is_none());
-        assert!(s3.is_started);
-        assert!(s3.total_seconds >= 0);
+        let session = sessions.get(1).unwrap();
+        assert_eq!(session.project.id, 2);
+        assert_eq!(session.total_seconds, 50);
 
         Ok(())
     }

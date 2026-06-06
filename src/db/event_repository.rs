@@ -1,6 +1,6 @@
 use crate::db::database::Repository;
 use crate::model::event::{Event, EventType};
-use rusqlite::{Connection, OptionalExtension, Result, named_params};
+use rusqlite::{named_params, Connection, OptionalExtension, Result};
 use time::Date;
 
 pub struct EventRepository<'a> {
@@ -115,39 +115,6 @@ impl<'a> EventRepository<'a> {
         Ok(exists)
     }
 
-    /// Iterates over all events for a given date in chronological order.
-    ///
-    /// Events are streamed (not collected) and passed one-by-one to the provided callback.
-    ///
-    /// # Behavior
-    ///
-    /// - Only events within the given calendar date are included
-    /// - Results are ordered by timestamp ascending
-    /// - Events are not buffered in memory beyond iteration
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query fails or row mapping fails.
-    pub fn for_each<F>(&self, date: Date, mut consumer: F) -> Result<()>
-    where
-        F: FnMut(Event),
-    {
-        let mut statement = self.connection.prepare(
-            "SELECT * FROM event
-            WHERE timestamp >= unixepoch(:date) AND timestamp < unixepoch(:date, '+1 day')
-            ORDER BY timestamp",
-        )?;
-
-        let rows =
-            statement.query_map(named_params! {":date": date.to_string()}, Event::from_row)?;
-
-        for event in rows {
-            consumer(event?);
-        }
-
-        Ok(())
-    }
-
     /// Calls the provided function once for each latest started event per project.
     ///
     /// This selects projects whose most recent event is a start event, which can be
@@ -180,6 +147,39 @@ impl<'a> EventRepository<'a> {
             Some(row) => Ok(Some(Event::from_row(row)?)),
             None => Ok(None),
         }
+    }
+
+    /// Iterates over all events for a given date in chronological order.
+    ///
+    /// Events are streamed (not collected) and passed one-by-one to the provided callback.
+    ///
+    /// # Behavior
+    ///
+    /// - Only events within the given calendar date are included
+    /// - Results are ordered by timestamp ascending
+    /// - Events are not buffered in memory beyond iteration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or row mapping fails.
+    pub fn for_each<F>(&self, date: Date, mut consumer: F) -> Result<()>
+    where
+        F: FnMut(Event),
+    {
+        let mut statement = self.connection.prepare(
+            "SELECT * FROM event
+            WHERE timestamp >= unixepoch(:date) AND timestamp < unixepoch(:date, '+1 day')
+            ORDER BY timestamp",
+        )?;
+
+        let rows =
+            statement.query_map(named_params! {":date": date.to_string()}, Event::from_row)?;
+
+        for event in rows {
+            consumer(event?);
+        }
+
+        Ok(())
     }
 }
 

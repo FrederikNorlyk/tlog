@@ -206,7 +206,7 @@ mod tests {
                 .is_err()
         );
 
-        assert!(!project_repository.insert("Some name", None).is_err());
+        assert!(project_repository.insert("Some name", None).is_ok());
         assert!(project_repository.insert("Some name", None).is_err());
 
         Ok(())
