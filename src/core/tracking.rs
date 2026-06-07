@@ -61,6 +61,25 @@ impl<'a> Tracking<'a> {
         Ok(())
     }
 
+    /// Start or stop time tracking on a project, depending on whether it is already started or not.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if starting or stopping events fails.
+    pub fn toggle(&self, project_id: i32) -> Result<(), TrackingError> {
+        let event_repository = EventRepository::new(self.connection);
+
+        if let Some(started_event) = event_repository.get_started_event()?
+            && started_event.project_id == project_id
+        {
+            self.stop(project_id)?;
+        } else {
+            self.start(project_id)?;
+        }
+
+        Ok(())
+    }
+
     /// Explicitly sets time spent on a given project on a given date.
     ///
     /// The function deletes any existing events and creates a manual session.
@@ -561,6 +580,70 @@ mod tests {
         let session = sessions.get(1).unwrap();
         assert_eq!(session.project.id, 2);
         assert_eq!(session.total_seconds, 50);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_toggle_on_off() -> Result<(), Box<dyn Error>> {
+        let context = initialize_context()?;
+        let tracking = Tracking::new(context.connection());
+
+        tracking.toggle(1)?;
+
+        let events = context.collect_events()?;
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        assert_eq!(event.project_id, 1);
+        assert_eq!(event.event_type, Start);
+
+        tracking.toggle(1)?;
+
+        let events = context.collect_events()?;
+        assert_eq!(events.len(), 2);
+
+        let event = events.first().unwrap();
+        assert_eq!(event.project_id, 1);
+        assert_eq!(event.event_type, Start);
+
+        let event = events.get(1).unwrap();
+        assert_eq!(event.project_id, 1);
+        assert_eq!(event.event_type, Stop);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_toggle_several_projects() -> Result<(), Box<dyn Error>> {
+        let context = initialize_context()?;
+        let tracking = Tracking::new(context.connection());
+
+        tracking.toggle(1)?;
+
+        let events = context.collect_events()?;
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        assert_eq!(event.project_id, 1);
+        assert_eq!(event.event_type, Start);
+
+        tracking.toggle(2)?;
+
+        let events = context.collect_events()?;
+        assert_eq!(events.len(), 3);
+
+        let event = events.first().unwrap();
+        assert_eq!(event.project_id, 1);
+        assert_eq!(event.event_type, Start);
+
+        let event = events.get(1).unwrap();
+        assert_eq!(event.project_id, 1);
+        assert_eq!(event.event_type, Stop);
+
+        let event = events.get(2).unwrap();
+        assert_eq!(event.project_id, 2);
+        assert_eq!(event.event_type, Start);
 
         Ok(())
     }
