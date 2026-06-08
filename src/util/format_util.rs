@@ -9,4 +9,11 @@ impl FormatUtil {
 
         (hours, minutes, seconds)
     }
+
+    #[must_use]
+    pub fn seconds_to_duration(seconds: i64) -> String {
+        let (hours, minutes, seconds) = FormatUtil::seconds_to_hms(seconds);
+
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
+    }
 }

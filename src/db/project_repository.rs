@@ -1,6 +1,7 @@
 use crate::db::database::Repository;
 use crate::model::project::Project;
 use rusqlite::{Connection, OptionalExtension, Result, Row, named_params, params_from_iter};
+use time::Date;
 
 pub struct ProjectRepository<'a> {
     connection: &'a Connection,
@@ -24,7 +25,7 @@ impl<'a> ProjectRepository<'a> {
             "INSERT INTO project (name, description) VALUES (:name, :description)",
             named_params! {":name": name, ":description": description},
         )?;
-        
+
         Ok(self.connection.last_insert_rowid())
     }
 
@@ -100,6 +101,55 @@ impl<'a> ProjectRepository<'a> {
             ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
 
         let rows = statement.query_map(params_from_iter(params), Self::project_from_row)?;
+
+        rows.collect()
+    }
+
+    /// Returns all projects matching part of the given name.
+    ///
+    /// The function performs a wildcard search wrapping the `name` in `%`.
+    /// The search is case insensitive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `SQLite` fails to execute the query.
+    pub fn search_by_name(&self, name: &str, date: Date) -> Result<Vec<Project>> {
+        let sql = "
+        SELECT p.id, p.name, p.description
+        FROM project p
+        WHERE
+            p.name LIKE :pattern COLLATE NOCASE OR
+            p.description LIKE :pattern COLLATE NOCASE
+
+            AND NOT EXISTS (
+                SELECT 1
+                FROM event e
+                WHERE
+                    e.project_id = p.id AND
+                    e.timestamp >= unixepoch(:date) AND
+                    e.timestamp < unixepoch(:date, '+1 day')
+            )
+
+            AND NOT EXISTS (
+                SELECT 1
+                FROM manual_session m
+                WHERE
+                    m.project_id = p.id AND
+                    m.date = :date
+            )
+        ORDER BY p.name";
+
+        let mut statement = self.connection.prepare(sql)?;
+
+        let pattern = format!("%{}%", name);
+
+        let rows = statement.query_map(
+            named_params! {
+                ":pattern": pattern,
+                ":date": date.to_string(),
+            },
+            Self::project_from_row,
+        )?;
 
         rows.collect()
     }

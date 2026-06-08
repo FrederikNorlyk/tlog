@@ -1,16 +1,17 @@
-use crate::core::tracking::{Tracking, TrackingError};
+use crate::core::tracking::TrackingError;
 use crate::tui::components::session_table::SessionTable;
 use crossterm::event;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
-    DefaultTerminal, Frame,
-    buffer::Buffer,
-    layout::Rect,
+    buffer::Buffer, layout::Rect,
     style::Stylize,
     symbols::border,
     text::Line,
     widgets::{Block, Widget},
+    DefaultTerminal,
+    Frame,
 };
+use rusqlite::Connection;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -31,11 +32,13 @@ impl<'a> TerminalUserInterface<'a> {
     /// # Errors
     ///
     /// If `SQLite` fails to query sessions.
-    pub fn new(tracking: &'a Tracking) -> rusqlite::Result<Self> {
+    pub fn new(
+        connection: &'a Connection
+    ) -> rusqlite::Result<Self> {
         let date = OffsetDateTime::now_utc().date();
 
         Ok(Self {
-            session_table: SessionTable::new(date, tracking)?,
+            session_table: SessionTable::new(date, connection)?,
             exit: false,
             active_widget: ActiveWidget::SessionTable,
         })
@@ -95,7 +98,7 @@ impl<'a> TerminalUserInterface<'a> {
 
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<(), TuiError> {
         match key_event.code {
-            KeyCode::Char('q') => self.exit(),
+            KeyCode::Char('q') | KeyCode::Char('Q') => self.exit(),
 
             _ => match self.active_widget {
                 ActiveWidget::SessionTable => self.session_table.handle_key_event(key_event)?,
@@ -114,10 +117,7 @@ impl Widget for &mut TerminalUserInterface<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let title = Line::from(" tLog ".bold());
 
-        let instructions = Line::from(vec![
-            " Quit ".into(),
-            "<Q> ".blue().bold(),
-        ]);
+        let instructions = Line::from(vec![" Quit ".into(), "<Q> ".blue().bold()]);
 
         let block = Block::bordered()
             .title(title.centered())

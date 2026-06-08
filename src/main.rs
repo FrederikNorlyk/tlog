@@ -17,8 +17,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     let Some(command) = cli.command else {
-        let tracking = Tracking::new(database.connection());
-        let mut tui = TerminalUserInterface::new(&tracking)?;
+        let mut tui = TerminalUserInterface::new(database.connection())?;
         ratatui::run(|terminal| tui.run(terminal))?;
         return Ok(());
     };
