@@ -16,7 +16,7 @@ pub struct ProjectSelect<'a> {
     connection: &'a Connection,
     state: ListState,
     projects: Vec<Project>,
-    textarea: TextArea<'a>,
+    text_area: TextArea<'a>,
     date: Date,
 }
 
@@ -24,14 +24,14 @@ impl<'a> ProjectSelect<'a> {
     pub fn new(connection: &'a Connection, date: Date) -> rusqlite::Result<Self> {
         let project_repository = ProjectRepository::new(connection);
 
-        let mut state= ListState::default();
+        let mut state = ListState::default();
         state.select_first();
 
         Ok(Self {
             connection,
             state,
             projects: project_repository.search_by_name("", date)?,
-            textarea: TextArea::new(vec!["".to_string()]),
+            text_area: TextArea::new(vec!["".to_string()]),
             date,
         })
     }
@@ -55,7 +55,6 @@ impl<'a> ProjectSelect<'a> {
                 self.state.select_next();
             }
             KeyCode::Char('j') if ctrl_key_is_held => {
-                // TODO: Is never hit for some reason
                 self.state.select_previous();
             }
             KeyCode::Char('k') if ctrl_key_is_held => {
@@ -67,11 +66,11 @@ impl<'a> ProjectSelect<'a> {
                 });
             }
             _ => {
-                self.textarea.input(key_event);
+                self.text_area.input(key_event);
                 self.state.select_first();
 
                 let query = {
-                    self.textarea
+                    self.text_area
                         .lines()
                         .first()
                         .map(String::as_str)
@@ -124,7 +123,7 @@ impl<'a> ProjectSelect<'a> {
 
         StatefulWidget::render(list, chunks[0], buf, &mut self.state);
 
-        self.textarea.render(chunks[1], buf);
+        self.text_area.render(chunks[1], buf);
     }
 
     fn search_projects(&mut self, query: &str) -> rusqlite::Result<()> {

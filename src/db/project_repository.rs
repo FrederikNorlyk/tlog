@@ -164,7 +164,7 @@ impl<'a> ProjectRepository<'a> {
     where
         F: FnMut(Project) -> Result<()>,
     {
-        let mut stmt = self.connection.prepare("SELECT * FROM project")?;
+        let mut stmt = self.connection.prepare("SELECT * FROM project ORDER BY name, description")?;
 
         let rows = stmt.query_map([], Self::project_from_row)?;
 

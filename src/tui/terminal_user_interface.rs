@@ -1,14 +1,16 @@
 use crate::core::tracking::TrackingError;
+use crate::tui::components::project_table::ProjectTable;
 use crate::tui::components::session_table::SessionTable;
 use crossterm::event;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
+use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::{
     buffer::Buffer, layout::Rect,
-    style::Stylize,
-    symbols::border,
-    text::Line,
-    widgets::{Block, Widget},
-    DefaultTerminal,
+    widgets::Widget,
+    DefaultTerminal
+
+
+    ,
     Frame,
 };
 use rusqlite::Connection;
@@ -16,13 +18,16 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 use time::OffsetDateTime;
 
+#[derive(Eq, PartialEq)]
 enum ActiveWidget {
     SessionTable,
+    ProjectTable
 }
 
 pub struct TerminalUserInterface<'a> {
     exit: bool,
     session_table: SessionTable<'a>,
+    project_table: ProjectTable<'a>,
     active_widget: ActiveWidget,
 }
 
@@ -32,13 +37,12 @@ impl<'a> TerminalUserInterface<'a> {
     /// # Errors
     ///
     /// If `SQLite` fails to query sessions.
-    pub fn new(
-        connection: &'a Connection
-    ) -> rusqlite::Result<Self> {
+    pub fn new(connection: &'a Connection) -> rusqlite::Result<Self> {
         let date = OffsetDateTime::now_utc().date();
 
         Ok(Self {
             session_table: SessionTable::new(date, connection)?,
+            project_table: ProjectTable::new(connection)?,
             exit: false,
             active_widget: ActiveWidget::SessionTable,
         })
@@ -99,9 +103,12 @@ impl<'a> TerminalUserInterface<'a> {
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<(), TuiError> {
         match key_event.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => self.exit(),
+            KeyCode::Char('1') => self.active_widget = ActiveWidget::ProjectTable,
+            KeyCode::Char('2') => self.active_widget = ActiveWidget::SessionTable,
 
             _ => match self.active_widget {
                 ActiveWidget::SessionTable => self.session_table.handle_key_event(key_event)?,
+                ActiveWidget::ProjectTable => self.project_table.handle_key_event(key_event)?,
             },
         }
 
@@ -115,16 +122,13 @@ impl<'a> TerminalUserInterface<'a> {
 
 impl Widget for &mut TerminalUserInterface<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let title = Line::from(" tLog ".bold());
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Fill(1), Constraint::Fill(1)])
+            .split(area);
 
-        let instructions = Line::from(vec![" Quit ".into(), "<Q> ".blue().bold()]);
-
-        let block = Block::bordered()
-            .title(title.centered())
-            .title_bottom(instructions.centered())
-            .border_set(border::PLAIN);
-
-        self.session_table.render(area, buf, block);
+        self.project_table.render(chunks[0], buf, self.active_widget == ActiveWidget::ProjectTable);
+        self.session_table.render(chunks[1], buf, self.active_widget == ActiveWidget::SessionTable);
     }
 }
 

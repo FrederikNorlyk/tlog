@@ -1,5 +1,6 @@
 use crate::core::tracking::Tracking;
 use crate::model::session::Session;
+use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
 use crate::tui::components::project_select::{ProjectSelect, ProjectSelectEvent};
 use crate::tui::terminal_user_interface::TuiError;
 use crate::tui::terminal_user_interface::TuiError::InvalidState;
@@ -25,6 +26,7 @@ pub struct SessionTable<'a> {
     state: TableState,
     connection: &'a Connection,
     project_select: Option<ProjectSelect<'a>>,
+    is_showing_reset_alert_dialog: bool,
 }
 
 impl<'a> SessionTable<'a> {
@@ -48,6 +50,7 @@ impl<'a> SessionTable<'a> {
             state,
             connection,
             project_select: None,
+            is_showing_reset_alert_dialog: false,
         })
     }
 
@@ -59,80 +62,7 @@ impl<'a> SessionTable<'a> {
         }
     }
 
-    /// Handle user keypresses
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if executing user commands fails.
-    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<(), TuiError> {
-        if let Some(project_select) = &mut self.project_select {
-            if key_event.code == KeyCode::Esc {
-                self.project_select = None;
-            } else {
-                match project_select.handle_key_event(key_event)? {
-                    ProjectSelectEvent::Selected { project_id } => {
-                        let tracking = Tracking::new(self.connection);
-                        tracking.start(project_id)?;
-                        self.sessions = tracking.list_all_sessions(self.date)?;
-                        self.project_select = None;
-                    }
-                    ProjectSelectEvent::Ignore => {}
-                }
-            }
-            return Ok(());
-        }
-
-        match key_event.code {
-            KeyCode::Char('j') | KeyCode::Down => self.state.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => self.state.select_previous(),
-            KeyCode::Char('g') | KeyCode::Home => self.state.select_first(),
-            KeyCode::Char('G') | KeyCode::End => self.state.select_last(),
-            // TODO: lower case d should show a confirm dialog
-            KeyCode::Char('D') => self.reset_project()?,
-            KeyCode::Char(' ') => self.toggle_session()?,
-            KeyCode::Char('s') => {
-                self.project_select = Some(ProjectSelect::new(self.connection, self.date)?)
-            }
-            _ => {}
-        }
-
-        Ok(())
-    }
-
-    fn toggle_session(&mut self) -> Result<(), TuiError> {
-        let Some(selected_index) = self.state.selected() else {
-            return Err(InvalidState {
-                message: "No selected session",
-            });
-        };
-
-        let session = &self.sessions[selected_index];
-        let tracking = Tracking::new(self.connection);
-        tracking.toggle(session.project.id)?;
-        self.sessions = tracking.list_all_sessions(self.date)?;
-
-        Ok(())
-    }
-
-    fn reset_project(&mut self) -> Result<(), TuiError> {
-        let Some(selected_index) = self.state.selected() else {
-            return Err(InvalidState {
-                message: "No selected session",
-            });
-        };
-
-        let session = &self.sessions[selected_index];
-        let tracking = Tracking::new(self.connection);
-        tracking.reset(session.project.id, self.date)?;
-        self.sessions = tracking.list_all_sessions(self.date)?;
-
-        Ok(())
-    }
-
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer, block: Block) {
-        let inner = block.inner(area);
-        block.render(area, buf);
-
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, is_active: bool) {
         let mut total_seconds = 0;
         let mut max_name_length: u16 = 5;
 
@@ -172,31 +102,32 @@ impl<'a> SessionTable<'a> {
             Constraint::Length(8),
         ];
 
-        let title = Line::from(" Sessions ".bold());
+        let title = Line::from(" [2] Sessions ");
 
-        let instructions = Line::from(vec![
-            " Use ".into(),
-            "g/G".blue().bold(),
-            " to go top/bottom, ".into(),
-            "space".blue().bold(),
-            " to toggle tracking, ".into(),
-            "s".blue().bold(),
-            " to track a new project, ".into(),
-            "d".blue().bold(),
-            " to delete ".into()
-        ]);
+        let mut table_block = Block::bordered().title(title).border_set(border::THICK);
 
-        let table_block = Block::bordered()
-            .title(title.centered())
-            .title_bottom(instructions.centered())
-            .border_set(border::THICK);
+        if is_active {
+            let instructions = Line::from(vec![
+                " Use ".into(),
+                "g/G".blue().bold(),
+                " to go top/bottom, ".into(),
+                "space".blue().bold(),
+                " to toggle tracking, ".into(),
+                "s".blue().bold(),
+                " to track a new project, ".into(),
+                "d".blue().bold(),
+                " to delete ".into(),
+            ]);
+
+            table_block = table_block.title_bottom(instructions.centered()).green();
+        }
 
         let table = Table::new(rows, widths)
             .block(table_block)
             .row_highlight_style(Style::new().reversed())
             .footer(footer);
 
-        StatefulWidget::render(table, inner, buf, &mut self.state);
+        StatefulWidget::render(table, area, buf, &mut self.state);
 
         if let Some(project_select) = &mut self.project_select {
             let shadow = Shadow::overlay().black().on_yellow();
@@ -209,11 +140,108 @@ impl<'a> SessionTable<'a> {
                 .fg(Color::DarkGray);
 
             let centered_area =
-                inner.centered(Constraint::Percentage(60), Constraint::Percentage(60));
+                area.centered(Constraint::Percentage(60), Constraint::Percentage(60));
 
             // clears out any background in the area before rendering the popup
             Widget::render(Clear, centered_area, buf);
             project_select.render(centered_area, buf, popup_block);
         }
+
+        if self.is_showing_reset_alert_dialog {
+            let dialog = AlertDialog::new("You are about to reset the session");
+            dialog.render(area, buf);
+        }
+    }
+
+    /// Handle user keypresses
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if executing user commands fails.
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<(), TuiError> {
+        if let Some(project_select) = &mut self.project_select {
+            if key_event.code == KeyCode::Esc {
+                self.project_select = None;
+                return Ok(());
+            }
+
+            match project_select.handle_key_event(key_event)? {
+                ProjectSelectEvent::Selected { project_id } => {
+                    let tracking = Tracking::new(self.connection);
+                    tracking.start(project_id)?;
+                    self.sessions = tracking.list_all_sessions(self.date)?;
+                    self.project_select = None;
+                }
+                ProjectSelectEvent::Ignore => {}
+            }
+
+            return Ok(());
+        } else if self.is_showing_reset_alert_dialog {
+            match AlertDialog::handle_key_event(key_event) {
+                AlertDialogEvent::Confirm => {
+                    self.reset_session()?;
+                    self.is_showing_reset_alert_dialog = false
+                }
+                AlertDialogEvent::Cancel => self.is_showing_reset_alert_dialog = false,
+                AlertDialogEvent::Ignore => {}
+            }
+            return Ok(());
+        }
+
+        let has_selected_session = self.get_selected_session().is_some();
+
+        match key_event.code {
+            KeyCode::Char('j') | KeyCode::Down => self.state.select_next(),
+            KeyCode::Char('k') | KeyCode::Up => self.state.select_previous(),
+            KeyCode::Char('g') | KeyCode::Home => self.state.select_first(),
+            KeyCode::Char('G') | KeyCode::End => self.state.select_last(),
+            KeyCode::Char('d') if has_selected_session => self.is_showing_reset_alert_dialog = true,
+            KeyCode::Char('D') if has_selected_session => self.reset_session()?,
+            KeyCode::Char(' ') if has_selected_session => self.toggle_session()?,
+            KeyCode::Char('s') => {
+                self.project_select = Some(ProjectSelect::new(self.connection, self.date)?)
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn toggle_session(&mut self) -> Result<(), TuiError> {
+        let Some(session) = self.get_selected_session() else {
+            return Err(InvalidState {
+                message: "No selected session",
+            });
+        };
+
+        let tracking = Tracking::new(self.connection);
+        tracking.toggle(session.project.id)?;
+        self.sessions = tracking.list_all_sessions(self.date)?;
+
+        Ok(())
+    }
+
+    fn reset_session(&mut self) -> Result<(), TuiError> {
+        let Some(session) = self.get_selected_session() else {
+            return Err(InvalidState {
+                message: "No selected session",
+            });
+        };
+
+        let tracking = Tracking::new(self.connection);
+        tracking.reset(session.project.id, self.date)?;
+        self.sessions = tracking.list_all_sessions(self.date)?;
+
+        Ok(())
+    }
+
+    fn get_selected_session(&self) -> Option<&Session> {
+        let Some(selected_index) = self.state.selected() else {
+            return None;
+        };
+
+        let session = &self.sessions[selected_index];
+
+        Some(session)
     }
 }
