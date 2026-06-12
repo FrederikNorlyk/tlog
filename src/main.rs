@@ -5,11 +5,11 @@ use tlog::cli::commands::{Cli, Command};
 use tlog::cli::config_command::ConfigCommand;
 use tlog::cli::project_command::handle_project_command;
 use tlog::core::config::Config;
+use tlog::core::format::Format;
 use tlog::core::tracking::Tracking;
 use tlog::db::database::Database;
 use tlog::db::project_repository::ProjectRepository;
 use tlog::tui::terminal_user_interface::TerminalUserInterface;
-use tlog::core::format::Format;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let database = Database::new()?;
@@ -81,7 +81,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                 let config_path = Config::get_or_create_file_path()?;
                 println!("Config: {}", config_path.display());
-            },
+            }
             ConfigCommand::TimeFormat { value } => {
                 if let Some(time_format) = value {
                     Config::set_time_format(time_format)?;

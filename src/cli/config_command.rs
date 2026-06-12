@@ -6,6 +6,6 @@ pub enum ConfigCommand {
     Where,
     /// Set time format (Seconds | HoursMinutes | HoursMinutesSeconds | DecimalHours)
     TimeFormat {
-        value: Option<TimeFormat>
+        value: Option<TimeFormat>,
     },
 }

@@ -113,11 +113,7 @@ impl<'a> SessionTable<'a> {
         let footer = Row::new(vec![
             Cell::from("Total").bold(),
             Cell::from(""),
-            Cell::from(Format::seconds_to_duration(
-                total_seconds,
-                self.time_format,
-            ))
-            .underlined(),
+            Cell::from(Format::seconds_to_duration(total_seconds, self.time_format)).underlined(),
         ]);
 
         let duration_width = match self.time_format {

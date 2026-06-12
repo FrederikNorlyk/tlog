@@ -1,6 +1,6 @@
 use crate::db::database::Repository;
 use crate::model::event::{Event, EventType};
-use rusqlite::{named_params, Connection, OptionalExtension, Result};
+use rusqlite::{Connection, OptionalExtension, Result, named_params};
 use time::Date;
 
 pub struct EventRepository<'a> {

@@ -25,7 +25,8 @@ impl<'a> ProjectForm<'a> {
                 .title("Name"),
         );
 
-        let mut description_text_area = TextArea::new(vec![description.clone().unwrap_or_default()]);
+        let mut description_text_area =
+            TextArea::new(vec![description.clone().unwrap_or_default()]);
         description_text_area.set_style(Style::default().fg(Color::DarkGray));
 
         description_text_area.set_block(
@@ -80,7 +81,8 @@ impl<'a> ProjectForm<'a> {
 
         if self.get_name_value().len() == 0 {
             is_valid = false;
-            self.name_text_area.set_block(block.border_style(Color::Red));
+            self.name_text_area
+                .set_block(block.border_style(Color::Red));
         } else {
             self.name_text_area
                 .set_block(block.border_style(Color::DarkGray));
@@ -100,7 +102,8 @@ impl<'a> ProjectForm<'a> {
     }
 
     fn get_description_value(&self) -> Option<String> {
-        let description = self.description_text_area
+        let description = self
+            .description_text_area
             .lines()
             .first()
             .map(String::as_str)
@@ -119,10 +122,13 @@ impl<'a> ProjectForm<'a> {
         self.is_name_focused = !self.is_name_focused;
 
         if self.is_name_focused {
-            self.name_text_area.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
-            self.description_text_area.set_cursor_style(Style::default());
+            self.name_text_area
+                .set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
+            self.description_text_area
+                .set_cursor_style(Style::default());
         } else {
-            self.description_text_area.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
+            self.description_text_area
+                .set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
             self.name_text_area.set_cursor_style(Style::default());
         }
     }
@@ -156,7 +162,10 @@ impl<'a> Widget for &ProjectForm<'a> {
 }
 
 pub enum ProjectFormEvent {
-    Save { name: String, description: Option<String> },
+    Save {
+        name: String,
+        description: Option<String>,
+    },
     Cancel,
     Consumed,
 }

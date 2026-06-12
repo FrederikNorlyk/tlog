@@ -1,3 +1,4 @@
+use crate::core::format::Format;
 use crate::core::time_format::TimeFormat;
 use crate::tui::terminal_user_interface::TuiError;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -7,7 +8,6 @@ use ratatui::prelude::{Color, Stylize, Widget};
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear};
 use ratatui_textarea::TextArea;
-use crate::core::format::Format;
 
 pub struct ManualSessionDialog<'a> {
     text_area: TextArea<'a>,

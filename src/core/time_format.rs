@@ -15,7 +15,7 @@ impl TimeFormat {
             TimeFormat::HoursMinutesSeconds => TimeFormat::HoursMinutes,
             TimeFormat::HoursMinutes => TimeFormat::DecimalHours,
             TimeFormat::DecimalHours => TimeFormat::Seconds,
-            TimeFormat::Seconds => TimeFormat::HoursMinutesSeconds
+            TimeFormat::Seconds => TimeFormat::HoursMinutesSeconds,
         }
     }
 }

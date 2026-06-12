@@ -1,5 +1,5 @@
-use crate::model::project::Project;
 use crate::core::format::Format;
+use crate::model::project::Project;
 use std::fmt;
 use std::fmt::Formatter;
 

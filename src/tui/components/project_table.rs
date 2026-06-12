@@ -166,7 +166,11 @@ impl<'a> ProjectTable<'a> {
         Ok(())
     }
 
-    fn insert_project(&mut self, name: String, description: Option<String>) -> Result<(), TuiError> {
+    fn insert_project(
+        &mut self,
+        name: String,
+        description: Option<String>,
+    ) -> Result<(), TuiError> {
         let project_repository = ProjectRepository::new(self.connection);
         project_repository.insert(name.as_str(), description.as_deref())?;
         self.refresh_projects()?;

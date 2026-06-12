@@ -1,6 +1,6 @@
 use crate::db::database::Repository;
 use crate::model::manual_session::ManualSession;
-use rusqlite::{named_params, Connection, Result};
+use rusqlite::{Connection, Result, named_params};
 use time::Date;
 
 pub struct ManualSessionRepository<'a> {

@@ -1,9 +1,9 @@
 use crate::core::paths::Paths;
+use crate::core::time_format::TimeFormat;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
-use crate::core::time_format::TimeFormat;
 
 pub struct Config;
 

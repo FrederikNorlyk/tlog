@@ -8,7 +8,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Stylize};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, Paragraph};
-use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget, DefaultTerminal, Frame};
+use ratatui::{DefaultTerminal, Frame, buffer::Buffer, layout::Rect, widgets::Widget};
 use rusqlite::Connection;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -37,7 +37,7 @@ impl<'a> TerminalUserInterface<'a> {
     pub fn new(connection: &'a Connection) -> Result<Self, TuiError> {
         let date = OffsetDateTime::now_utc().date();
         let time_format = Config::get()?.time_format();
-        
+
         Ok(Self {
             session_table: SessionTable::new(date, connection, time_format, false)?,
             project_table: ProjectTable::new(connection)?,
@@ -136,7 +136,6 @@ impl<'a> TerminalUserInterface<'a> {
     fn exit(&mut self) {
         self.exit = true;
     }
-
 }
 
 impl Widget for &mut TerminalUserInterface<'_> {
@@ -158,7 +157,6 @@ impl Widget for &mut TerminalUserInterface<'_> {
         );
 
         if let Some(overlay) = &self.active_overlay {
-
             let overlay_area = Rect {
                 x: area.x,
                 y: area.bottom().saturating_sub(3),
