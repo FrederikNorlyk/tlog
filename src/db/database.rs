@@ -1,7 +1,7 @@
 use crate::db::event_repository::EventRepository;
 use crate::db::manual_session_repository::ManualSessionRepository;
 use crate::db::project_repository::ProjectRepository;
-use crate::util::paths::Paths;
+use crate::core::paths::Paths;
 use rusqlite::Connection;
 use std::fs;
 use std::path::PathBuf;
