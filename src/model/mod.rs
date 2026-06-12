@@ -1,4 +1,4 @@
-pub mod project;
 pub mod event;
-pub mod session;
 pub mod manual_session;
+pub mod project;
+pub mod session;

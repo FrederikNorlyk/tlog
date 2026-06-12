@@ -4,11 +4,12 @@ use time::OffsetDateTime;
 use tlog::cli::commands::{Cli, Command};
 use tlog::cli::config_command::ConfigCommand;
 use tlog::cli::project_command::handle_project_command;
+use tlog::core::config::Config;
+use tlog::core::format::Format;
 use tlog::core::tracking::Tracking;
 use tlog::db::database::Database;
 use tlog::db::project_repository::ProjectRepository;
 use tlog::tui::terminal_user_interface::TerminalUserInterface;
-use tlog::util::format_util::FormatUtil;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let database = Database::new()?;
@@ -17,8 +18,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     let Some(command) = cli.command else {
-        let tui = TerminalUserInterface;
-        ratatui::run(|terminal| tui.launch(terminal))?;
+        let mut tui = TerminalUserInterface::new(database.connection())?;
+        ratatui::run(|terminal| tui.run(terminal))?;
         return Ok(());
     };
 
@@ -65,18 +66,28 @@ fn main() -> Result<(), Box<dyn Error>> {
                     println!("{session}");
                 });
 
-            let (hours, minutes, seconds) = FormatUtil::seconds_to_hms(total);
+            let (hours, minutes, seconds) = Format::seconds_to_hms(total);
 
             println!("{BOLD}{hours:02}:{minutes:02}:{seconds:02}       Total{RESET}");
         }
         Command::Config { command } => match command {
             ConfigCommand::Where => {
-                let path = database
+                let database_path = database
                     .connection()
                     .path()
                     .ok_or_else(|| std::io::Error::other("Database connection has no path"))?;
 
-                println!("{path}");
+                println!("Database: {database_path}");
+
+                let config_path = Config::get_or_create_file_path()?;
+                println!("Config: {}", config_path.display());
+            }
+            ConfigCommand::TimeFormat { value } => {
+                if let Some(time_format) = value {
+                    Config::set_time_format(time_format)?;
+                } else {
+                    println!("Time format: {:?}", Config::get()?.time_format());
+                }
             }
         },
     }

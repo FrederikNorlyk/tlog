@@ -1,6 +1,7 @@
 use crate::db::database::Repository;
 use crate::model::project::Project;
 use rusqlite::{Connection, OptionalExtension, Result, Row, named_params, params_from_iter};
+use time::Date;
 
 pub struct ProjectRepository<'a> {
     connection: &'a Connection,
@@ -24,7 +25,7 @@ impl<'a> ProjectRepository<'a> {
             "INSERT INTO project (name, description) VALUES (:name, :description)",
             named_params! {":name": name, ":description": description},
         )?;
-        
+
         Ok(self.connection.last_insert_rowid())
     }
 
@@ -104,6 +105,55 @@ impl<'a> ProjectRepository<'a> {
         rows.collect()
     }
 
+    /// Returns all projects matching part of the given name.
+    ///
+    /// The function performs a wildcard search wrapping the `name` in `%`.
+    /// The search is case insensitive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `SQLite` fails to execute the query.
+    pub fn search_by_name(&self, name: &str, date: Date) -> Result<Vec<Project>> {
+        let sql = "
+        SELECT p.id, p.name, p.description
+        FROM project p
+        WHERE
+            (
+                p.name LIKE :pattern COLLATE NOCASE OR
+                p.description LIKE :pattern COLLATE NOCASE
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM event e
+                WHERE
+                    e.project_id = p.id AND
+                    e.timestamp >= unixepoch(:date) AND
+                    e.timestamp < unixepoch(:date, '+1 day')
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM manual_session m
+                WHERE
+                    m.project_id = p.id AND
+                    m.date = :date
+            )
+        ORDER BY p.name";
+
+        let mut statement = self.connection.prepare(sql)?;
+
+        let pattern = format!("%{}%", name);
+
+        let rows = statement.query_map(
+            named_params! {
+                ":pattern": pattern,
+                ":date": date.to_string(),
+            },
+            Self::project_from_row,
+        )?;
+
+        rows.collect()
+    }
+
     /// Calls the provided function once for each project in the database.
     ///
     /// # Errors
@@ -114,7 +164,9 @@ impl<'a> ProjectRepository<'a> {
     where
         F: FnMut(Project) -> Result<()>,
     {
-        let mut stmt = self.connection.prepare("SELECT * FROM project")?;
+        let mut stmt = self
+            .connection
+            .prepare("SELECT * FROM project ORDER BY name, description")?;
 
         let rows = stmt.query_map([], Self::project_from_row)?;
 
@@ -307,5 +359,135 @@ mod tests {
         assert_eq!(projects[2].name, "Project C");
 
         Ok(())
+    }
+
+    mod search_by_name {
+        use super::*;
+        use crate::db::event_repository::EventRepository;
+        use crate::db::manual_session_repository::ManualSessionRepository;
+        use crate::model::event::EventType::Start;
+        use time::{Month, PrimitiveDateTime, Time};
+
+        fn test_date() -> Date {
+            Date::from_calendar_date(2024, Month::January, 1).unwrap()
+        }
+
+        fn seed_projects(repository: &ProjectRepository) -> Result<()> {
+            repository.insert("Alpha Project", None)?;
+            repository.insert("Beta Project", None)?;
+            repository.insert("Gamma", None)?;
+            Ok(())
+        }
+
+        #[test]
+        fn basic_match() -> Result<()> {
+            let context = DBTestContext::new()?;
+            let repository = ProjectRepository::new(context.connection());
+
+            seed_projects(&repository)?;
+
+            let results = repository.search_by_name("project", test_date())?;
+
+            assert_eq!(results.len(), 2);
+
+            let names: Vec<_> = results.iter().map(|p| p.name.as_str()).collect();
+            assert!(names.contains(&"Alpha Project"));
+            assert!(names.contains(&"Beta Project"));
+
+            Ok(())
+        }
+
+        #[test]
+        fn case_insensitive() -> Result<()> {
+            let context = DBTestContext::new()?;
+            let repository = ProjectRepository::new(context.connection());
+
+            repository.insert("Alpha Project", None)?;
+
+            let results = repository.search_by_name("alpha", test_date())?;
+
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].name, "Alpha Project");
+
+            Ok(())
+        }
+
+        #[test]
+        fn matches_description() -> Result<()> {
+            let context = DBTestContext::new()?;
+            let repository = ProjectRepository::new(context.connection());
+
+            repository.insert("Alpha", Some("Contains keyword XYZ"))?;
+            repository.insert("Beta", Some("Nothing here"))?;
+
+            let results = repository.search_by_name("xyz", test_date())?;
+
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].name, "Alpha");
+
+            Ok(())
+        }
+
+        #[test]
+        fn excludes_manual_session() -> Result<()> {
+            let context = DBTestContext::new()?;
+            let connection = context.connection();
+
+            let project_repository = ProjectRepository::new(connection);
+            let manual_session_repository = ManualSessionRepository::new(connection);
+
+            project_repository.insert("Blocked Project", None)?;
+
+            manual_session_repository.upsert(1, test_date(), 3600)?;
+
+            let results = project_repository.search_by_name("blocked", test_date())?;
+
+            assert!(results.is_empty());
+
+            Ok(())
+        }
+
+        #[test]
+        fn excludes_event_same_day() -> Result<()> {
+            let context = DBTestContext::new()?;
+            let connection = context.connection();
+
+            let project_repository = ProjectRepository::new(connection);
+
+            project_repository.insert("Event Blocked Project", None)?;
+
+            let date = test_date();
+
+            let time = Time::from_hms(15, 56, 31).unwrap();
+
+            let timestamp = PrimitiveDateTime::new(date, time)
+                .assume_utc()
+                .unix_timestamp();
+
+            let event_repository = EventRepository::new(connection);
+
+            event_repository.insert(1, Start, timestamp)?;
+
+            let results = project_repository.search_by_name("event", date)?;
+
+            assert!(results.is_empty());
+
+            Ok(())
+        }
+
+        #[test]
+        fn pattern_wrapping() -> Result<()> {
+            let context = DBTestContext::new()?;
+            let repository = ProjectRepository::new(context.connection());
+
+            repository.insert("SuperProjectX", None)?;
+
+            let results = repository.search_by_name("Project", test_date())?;
+
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].name, "SuperProjectX");
+
+            Ok(())
+        }
     }
 }
