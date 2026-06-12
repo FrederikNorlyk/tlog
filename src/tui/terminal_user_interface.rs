@@ -1,18 +1,14 @@
+use crate::core::config::{Config, ConfigError};
 use crate::core::tracking::TrackingError;
 use crate::tui::components::project_table::ProjectTable;
 use crate::tui::components::session_table::SessionTable;
 use crossterm::event;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::{
-    buffer::Buffer, layout::Rect,
-    widgets::Widget,
-    DefaultTerminal
-
-
-    ,
-    Frame,
-};
+use ratatui::style::{Color, Stylize};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget, DefaultTerminal, Frame};
 use rusqlite::Connection;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -21,7 +17,7 @@ use time::OffsetDateTime;
 #[derive(Eq, PartialEq)]
 enum ActiveWidget {
     SessionTable,
-    ProjectTable
+    ProjectTable,
 }
 
 pub struct TerminalUserInterface<'a> {
@@ -29,6 +25,7 @@ pub struct TerminalUserInterface<'a> {
     session_table: SessionTable<'a>,
     project_table: ProjectTable<'a>,
     active_widget: ActiveWidget,
+    active_overlay: Option<KeybindOverlay>,
 }
 
 impl<'a> TerminalUserInterface<'a> {
@@ -37,14 +34,16 @@ impl<'a> TerminalUserInterface<'a> {
     /// # Errors
     ///
     /// If `SQLite` fails to query sessions.
-    pub fn new(connection: &'a Connection) -> rusqlite::Result<Self> {
+    pub fn new(connection: &'a Connection) -> Result<Self, TuiError> {
         let date = OffsetDateTime::now_utc().date();
-
+        let time_format = Config::get()?.time_format();
+        
         Ok(Self {
-            session_table: SessionTable::new(date, connection)?,
+            session_table: SessionTable::new(date, connection, time_format, false)?,
             project_table: ProjectTable::new(connection)?,
             exit: false,
             active_widget: ActiveWidget::SessionTable,
+            active_overlay: None,
         })
     }
 
@@ -101,15 +100,34 @@ impl<'a> TerminalUserInterface<'a> {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<(), TuiError> {
-        match key_event.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') => self.exit(),
-            KeyCode::Char('1') => self.active_widget = ActiveWidget::ProjectTable,
-            KeyCode::Char('2') => self.active_widget = ActiveWidget::SessionTable,
+        let result = match self.active_widget {
+            ActiveWidget::SessionTable => self.session_table.handle_key_event(key_event)?,
+            ActiveWidget::ProjectTable => self.project_table.handle_key_event(key_event)?,
+        };
 
-            _ => match self.active_widget {
-                ActiveWidget::SessionTable => self.session_table.handle_key_event(key_event)?,
-                ActiveWidget::ProjectTable => self.project_table.handle_key_event(key_event)?,
+        if result == KeyEventResult::Consumed
+            && let Some(overlay) = &self.active_overlay
+        {
+            match overlay {
+                KeybindOverlay::CopySession => {
+                    self.session_table.set_is_showing_copy_keybinds(false)
+                }
+            }
+            self.active_overlay = None;
+        }
+
+        match result {
+            KeyEventResult::Unused => match key_event.code {
+                KeyCode::Char('q') | KeyCode::Char('Q') => self.exit(),
+                KeyCode::Char('1') => self.active_widget = ActiveWidget::ProjectTable,
+                KeyCode::Char('2') => self.active_widget = ActiveWidget::SessionTable,
+                _ => {}
             },
+            KeyEventResult::Consumed => {}
+            KeyEventResult::ShowKeybindOverlay { overlay } => {
+                self.active_overlay = Some(overlay);
+                self.session_table.set_is_showing_copy_keybinds(true);
+            }
         }
 
         Ok(())
@@ -118,6 +136,7 @@ impl<'a> TerminalUserInterface<'a> {
     fn exit(&mut self) {
         self.exit = true;
     }
+
 }
 
 impl Widget for &mut TerminalUserInterface<'_> {
@@ -127,9 +146,68 @@ impl Widget for &mut TerminalUserInterface<'_> {
             .constraints([Constraint::Fill(1), Constraint::Fill(1)])
             .split(area);
 
-        self.project_table.render(chunks[0], buf, self.active_widget == ActiveWidget::ProjectTable);
-        self.session_table.render(chunks[1], buf, self.active_widget == ActiveWidget::SessionTable);
+        self.project_table.render(
+            chunks[0],
+            buf,
+            self.active_widget == ActiveWidget::ProjectTable,
+        );
+        self.session_table.render(
+            chunks[1],
+            buf,
+            self.active_widget == ActiveWidget::SessionTable,
+        );
+
+        if let Some(overlay) = &self.active_overlay {
+
+            let overlay_area = Rect {
+                x: area.x,
+                y: area.bottom().saturating_sub(3),
+                width: area.width,
+                height: 3,
+            };
+
+            let paragraph_area = Rect {
+                x: area.x,
+                y: area.bottom().saturating_sub(2),
+                width: area.width,
+                height: 1,
+            };
+
+            let instructions = match overlay {
+                KeybindOverlay::CopySession => Line::from(vec![
+                    "c".blue().bold(),
+                    " copy all info, ".into(),
+                    "n".blue().bold(),
+                    " copy name, ".into(),
+                    "d".blue().bold(),
+                    " copy description ".into(),
+                    "t".blue().bold(),
+                    " copy time ".into(),
+                ]),
+            };
+
+            Clear::default().render(overlay_area, buf);
+
+            let block = Block::new().bg(Color::DarkGray);
+            block.render(overlay_area, buf);
+
+            Paragraph::new(instructions)
+                .alignment(ratatui::layout::Alignment::Center)
+                .render(paragraph_area, buf);
+        }
     }
+}
+
+#[derive(Eq, PartialEq)]
+pub enum KeyEventResult {
+    Unused,
+    Consumed,
+    ShowKeybindOverlay { overlay: KeybindOverlay },
+}
+
+#[derive(Eq, PartialEq)]
+pub enum KeybindOverlay {
+    CopySession,
 }
 
 #[derive(Debug, Error)]
@@ -140,8 +218,12 @@ pub enum TuiError {
     Io(#[from] std::io::Error),
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error("Clipboard error: {0}")]
+    Clipboard(#[from] arboard::Error),
     #[error("Invalid state: {message}")]
     InvalidState { message: &'static str },
+    #[error("Config error: {0}")]
+    Config(#[from] ConfigError),
 }
 
 // #[cfg(test)]

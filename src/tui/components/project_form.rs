@@ -15,37 +15,38 @@ pub struct ProjectForm<'a> {
 
 impl<'a> ProjectForm<'a> {
     pub fn new(name: Option<String>, description: Option<String>) -> Self {
-        let mut name_input = TextArea::new(vec![name.clone().unwrap_or_default()]);
-        name_input.set_style(Style::default().fg(Color::DarkGray));
+        let mut name_text_area = TextArea::new(vec![name.clone().unwrap_or_default()]);
+        name_text_area.set_style(Style::default().fg(Color::DarkGray));
 
-        name_input.set_block(
+        name_text_area.set_block(
             Block::default()
                 .border_style(Color::DarkGray)
                 .borders(Borders::ALL)
                 .title("Name"),
         );
 
-        let mut description_input = TextArea::new(vec![description.clone().unwrap_or_default()]);
-        description_input.set_style(Style::default().fg(Color::DarkGray));
+        let mut description_text_area = TextArea::new(vec![description.clone().unwrap_or_default()]);
+        description_text_area.set_style(Style::default().fg(Color::DarkGray));
 
-        description_input.set_block(
+        description_text_area.set_block(
             Block::default()
                 .border_style(Color::DarkGray)
                 .borders(Borders::ALL)
                 .title("Description"),
         );
 
-        description_input.set_cursor_style(Style::default());
+        description_text_area.set_cursor_style(Style::default());
 
         Self {
-            name_text_area: name_input,
-            description_text_area: description_input,
+            name_text_area,
+            description_text_area,
             is_name_focused: true,
         }
     }
 
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<ProjectFormEvent, TuiError> {
         match key_event.code {
+            KeyCode::Esc => return Ok(ProjectFormEvent::Cancel),
             KeyCode::Tab => self.toggle_focused_field(),
             KeyCode::Enter => {
                 let is_valid = self.validate_form()?;
@@ -65,7 +66,7 @@ impl<'a> ProjectForm<'a> {
             }
         }
 
-        Ok(ProjectFormEvent::Ignore)
+        Ok(ProjectFormEvent::Consumed)
     }
 
     fn validate_form(&mut self) -> Result<bool, TuiError> {
@@ -85,21 +86,6 @@ impl<'a> ProjectForm<'a> {
                 .set_block(block.border_style(Color::DarkGray));
         }
 
-        let Some(block) = self.description_text_area.block().cloned() else {
-            return Err(TuiError::InvalidState {
-                message: "No block on description text area",
-            });
-        };
-
-        if self.get_description_value().len() == 0 {
-            is_valid = false;
-            self.description_text_area
-                .set_block(block.border_style(Color::Red));
-        } else {
-            self.description_text_area
-                .set_block(block.border_style(Color::DarkGray));
-        }
-
         Ok(is_valid)
     }
 
@@ -113,13 +99,20 @@ impl<'a> ProjectForm<'a> {
             .to_string()
     }
 
-    fn get_description_value(&self) -> String {
-        self.description_text_area
+    fn get_description_value(&self) -> Option<String> {
+        let description = self.description_text_area
             .lines()
             .first()
             .map(String::as_str)
             .unwrap_or("")
-            .to_string()
+            .trim()
+            .to_string();
+
+        if description.len() == 0 {
+            None
+        } else {
+            Some(description)
+        }
     }
 
     fn toggle_focused_field(&mut self) {
@@ -163,6 +156,7 @@ impl<'a> Widget for &ProjectForm<'a> {
 }
 
 pub enum ProjectFormEvent {
-    Save { name: String, description: String },
-    Ignore,
+    Save { name: String, description: Option<String> },
+    Cancel,
+    Consumed,
 }

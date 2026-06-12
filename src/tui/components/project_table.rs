@@ -2,8 +2,8 @@ use crate::db::project_repository::ProjectRepository;
 use crate::model::project::Project;
 use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
 use crate::tui::components::project_form::{ProjectForm, ProjectFormEvent};
-use crate::tui::terminal_user_interface::TuiError;
 use crate::tui::terminal_user_interface::TuiError::InvalidState;
+use crate::tui::terminal_user_interface::{KeyEventResult, TuiError};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
@@ -99,35 +99,38 @@ impl<'a> ProjectTable<'a> {
     /// # Errors
     ///
     /// Returns an error if executing user commands fails.
-    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<(), TuiError> {
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, TuiError> {
         if self.is_showing_deletion_alert_dialog {
-            match AlertDialog::handle_key_event(key_event) {
+            match AlertDialog::handle_key_code(key_event.code) {
                 AlertDialogEvent::Confirm => {
                     self.delete_project()?;
-                    self.is_showing_deletion_alert_dialog = false
+                    self.is_showing_deletion_alert_dialog = false;
                 }
-                AlertDialogEvent::Cancel => self.is_showing_deletion_alert_dialog = false,
+                AlertDialogEvent::Cancel => {
+                    self.is_showing_deletion_alert_dialog = false;
+                }
                 AlertDialogEvent::Ignore => {}
-            }
-            return Ok(());
+            };
+
+            return Ok(KeyEventResult::Consumed);
         } else if let Some(form) = &mut self.project_form {
-            if key_event.code == KeyCode::Esc {
-                self.project_form = None;
-                return Ok(());
-            }
-            
             match form.handle_key_event(key_event)? {
                 ProjectFormEvent::Save { name, description } => {
                     self.insert_project(name, description)?;
                     self.project_form = None;
                 }
-                ProjectFormEvent::Ignore => {}
+                ProjectFormEvent::Cancel => {
+                    self.project_form = None;
+                }
+                ProjectFormEvent::Consumed => {}
             };
-            
-            return Ok(());
+
+            return Ok(KeyEventResult::Consumed);
         }
 
         let has_selected_project = self.get_selected_project().is_some();
+
+        let mut did_match = true;
 
         match key_event.code {
             KeyCode::Char('j') | KeyCode::Down => self.state.select_next(),
@@ -139,10 +142,14 @@ impl<'a> ProjectTable<'a> {
                 self.is_showing_deletion_alert_dialog = true
             }
             KeyCode::Char('D') if has_selected_project => self.delete_project()?,
-            _ => {}
+            _ => did_match = false,
         }
 
-        Ok(())
+        if did_match {
+            return Ok(KeyEventResult::Consumed);
+        }
+
+        Ok(KeyEventResult::Unused)
     }
 
     fn delete_project(&mut self) -> Result<(), TuiError> {
@@ -159,9 +166,9 @@ impl<'a> ProjectTable<'a> {
         Ok(())
     }
 
-    fn insert_project(&mut self, name: String, description: String) -> Result<(), TuiError> {
+    fn insert_project(&mut self, name: String, description: Option<String>) -> Result<(), TuiError> {
         let project_repository = ProjectRepository::new(self.connection);
-        project_repository.insert(name.as_str(), Some(description.as_str()))?;
+        project_repository.insert(name.as_str(), description.as_deref())?;
         self.refresh_projects()?;
 
         Ok(())
