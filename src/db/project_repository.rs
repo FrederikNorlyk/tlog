@@ -1,6 +1,7 @@
+use crate::core::app_error::AppError;
 use crate::db::database::Repository;
 use crate::model::project::Project;
-use rusqlite::{Connection, OptionalExtension, Result, Row, named_params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, Row, named_params, params_from_iter};
 use time::Date;
 
 pub struct ProjectRepository<'a> {
@@ -20,7 +21,7 @@ impl<'a> ProjectRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the insert statement, for
     /// example because the database connection is invalid, the `project` table
     /// does not exist, or the provided data violates a database constraint.
-    pub fn insert(&self, name: &str, description: Option<&str>) -> Result<i64> {
+    pub fn insert(&self, name: &str, description: Option<&str>) -> rusqlite::Result<i64> {
         self.connection.execute(
             "INSERT INTO project (name, description) VALUES (:name, :description)",
             named_params! {":name": name, ":description": description},
@@ -36,7 +37,7 @@ impl<'a> ProjectRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the update statement, for
     /// example because the database connection is invalid, the `project` table
     /// does not exist, or the provided data violates a database constraint.
-    pub fn update(&self, project: &Project) -> Result<()> {
+    pub fn update(&self, project: &Project) -> rusqlite::Result<()> {
         self.connection.execute(
             "UPDATE project SET name = :name, description = :description WHERE id = :id",
             named_params! {
@@ -56,7 +57,7 @@ impl<'a> ProjectRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the delete statement, for
     /// example because the database connection is invalid or the `project` table
     /// does not exist.
-    pub fn delete(&self, id: i32) -> Result<bool> {
+    pub fn delete(&self, id: i32) -> rusqlite::Result<bool> {
         let deleted_count = self.connection.execute(
             "DELETE FROM project WHERE id = (:id)",
             named_params! {":id": id},
@@ -72,7 +73,7 @@ impl<'a> ProjectRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the query, if the `project`
     /// table does not exist, if no project exists with the given ID, or if the
     /// returned row cannot be converted into a [`Project`].
-    pub fn get(&self, id: i32) -> Result<Option<Project>> {
+    pub fn get(&self, id: i32) -> rusqlite::Result<Option<Project>> {
         self.connection
             .query_row(
                 "SELECT id, name, description FROM project WHERE id = :id",
@@ -87,7 +88,7 @@ impl<'a> ProjectRepository<'a> {
     /// # Errors
     ///
     /// Returns database errors from query execution or row mapping.
-    pub fn find_by_ids(&self, ids: &[i32]) -> Result<Vec<Project>> {
+    pub fn find_by_ids(&self, ids: &[i32]) -> rusqlite::Result<Vec<Project>> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -113,7 +114,7 @@ impl<'a> ProjectRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if `SQLite` fails to execute the query.
-    pub fn search_by_name(&self, name: &str, date: Date) -> Result<Vec<Project>> {
+    pub fn search_by_name(&self, name: &str, date: Date) -> rusqlite::Result<Vec<Project>> {
         let sql = "
         SELECT p.id, p.name, p.description
         FROM project p
@@ -160,9 +161,9 @@ impl<'a> ProjectRepository<'a> {
     ///
     /// Returns an error if preparing or executing the query fails, or if a row
     /// cannot be converted into a [`Project`].
-    pub fn for_each<F>(&self, mut f: F) -> Result<()>
+    pub fn for_each<F>(&self, mut f: F) -> Result<(), AppError>
     where
-        F: FnMut(Project) -> Result<()>,
+        F: FnMut(Project) -> Result<(), AppError>,
     {
         let mut stmt = self
             .connection
@@ -177,7 +178,7 @@ impl<'a> ProjectRepository<'a> {
         Ok(())
     }
 
-    fn project_from_row(row: &Row<'_>) -> Result<Project> {
+    fn project_from_row(row: &Row<'_>) -> rusqlite::Result<Project> {
         Ok(Project {
             id: row.get("id")?,
             name: row.get("name")?,
@@ -187,7 +188,7 @@ impl<'a> ProjectRepository<'a> {
 }
 
 impl<'a> Repository<'a> for ProjectRepository<'a> {
-    fn initialize_schema(connection: &'a Connection) -> Result<()> {
+    fn initialize_schema(connection: &'a Connection) -> rusqlite::Result<()> {
         connection.execute(
             "CREATE TABLE IF NOT EXISTS project (
                 id INTEGER PRIMARY KEY,
@@ -207,7 +208,7 @@ mod tests {
     use crate::db::test_utils::DBTestContext;
 
     #[test]
-    fn test_insert() -> Result<()> {
+    fn test_insert() -> rusqlite::Result<()> {
         let context = DBTestContext::new()?;
         let project_repository = ProjectRepository::new(context.connection());
 
@@ -243,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_invalid_values_fails() -> Result<()> {
+    fn test_insert_invalid_values_fails() -> rusqlite::Result<()> {
         let context = DBTestContext::new()?;
         let project_repository = ProjectRepository::new(context.connection());
 
@@ -265,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update() -> Result<()> {
+    fn test_update() -> rusqlite::Result<()> {
         let context = DBTestContext::new()?;
         let project_repository = ProjectRepository::new(context.connection());
 
@@ -301,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_existing_project() -> Result<()> {
+    fn test_delete_existing_project() -> rusqlite::Result<()> {
         let context = DBTestContext::new()?;
         let project_repository = ProjectRepository::new(context.connection());
 
@@ -317,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_non_existing_project() -> Result<()> {
+    fn test_delete_non_existing_project() -> rusqlite::Result<()> {
         let context = DBTestContext::new()?;
         let project_repository = ProjectRepository::new(context.connection());
 
@@ -327,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_non_existing_project() -> Result<()> {
+    fn test_get_non_existing_project() -> rusqlite::Result<()> {
         let context = DBTestContext::new()?;
         let project_repository = ProjectRepository::new(context.connection());
 
@@ -337,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn test_for_each() -> Result<()> {
+    fn test_for_each() -> Result<(), AppError> {
         let context = DBTestContext::new()?;
         let project_repository = ProjectRepository::new(context.connection());
 
@@ -372,7 +373,7 @@ mod tests {
             Date::from_calendar_date(2024, Month::January, 1).unwrap()
         }
 
-        fn seed_projects(repository: &ProjectRepository) -> Result<()> {
+        fn seed_projects(repository: &ProjectRepository) -> rusqlite::Result<()> {
             repository.insert("Alpha Project", None)?;
             repository.insert("Beta Project", None)?;
             repository.insert("Gamma", None)?;
@@ -380,7 +381,7 @@ mod tests {
         }
 
         #[test]
-        fn basic_match() -> Result<()> {
+        fn basic_match() -> rusqlite::Result<()> {
             let context = DBTestContext::new()?;
             let repository = ProjectRepository::new(context.connection());
 
@@ -398,7 +399,7 @@ mod tests {
         }
 
         #[test]
-        fn case_insensitive() -> Result<()> {
+        fn case_insensitive() -> rusqlite::Result<()> {
             let context = DBTestContext::new()?;
             let repository = ProjectRepository::new(context.connection());
 
@@ -413,7 +414,7 @@ mod tests {
         }
 
         #[test]
-        fn matches_description() -> Result<()> {
+        fn matches_description() -> rusqlite::Result<()> {
             let context = DBTestContext::new()?;
             let repository = ProjectRepository::new(context.connection());
 
@@ -429,7 +430,7 @@ mod tests {
         }
 
         #[test]
-        fn excludes_manual_session() -> Result<()> {
+        fn excludes_manual_session() -> rusqlite::Result<()> {
             let context = DBTestContext::new()?;
             let connection = context.connection();
 
@@ -448,7 +449,7 @@ mod tests {
         }
 
         #[test]
-        fn excludes_event_same_day() -> Result<()> {
+        fn excludes_event_same_day() -> rusqlite::Result<()> {
             let context = DBTestContext::new()?;
             let connection = context.connection();
 
@@ -476,7 +477,7 @@ mod tests {
         }
 
         #[test]
-        fn pattern_wrapping() -> Result<()> {
+        fn pattern_wrapping() -> rusqlite::Result<()> {
             let context = DBTestContext::new()?;
             let repository = ProjectRepository::new(context.connection());
 

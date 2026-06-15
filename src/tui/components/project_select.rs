@@ -1,7 +1,6 @@
+use crate::core::app_error::AppError;
 use crate::db::project_repository::ProjectRepository;
 use crate::model::project::Project;
-use crate::tui::terminal_user_interface::TuiError;
-use crate::tui::terminal_user_interface::TuiError::InvalidState;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -44,7 +43,7 @@ impl<'a> ProjectSelect<'a> {
     pub fn handle_key_event(
         &mut self,
         key_event: KeyEvent,
-    ) -> Result<ProjectSelectEvent, TuiError> {
+    ) -> Result<ProjectSelectEvent, AppError> {
         let ctrl_key_is_held = key_event.modifiers.contains(KeyModifiers::CONTROL);
 
         match key_event.code {
@@ -61,9 +60,9 @@ impl<'a> ProjectSelect<'a> {
                 self.state.select_next();
             }
             KeyCode::Enter => {
-                return Ok(ProjectSelectEvent::Selected {
-                    project_id: self.get_selected_project_id()?,
-                });
+                if let Some(project_id) = self.get_selected_project_id() {
+                    return Ok(ProjectSelectEvent::Selected { project_id });
+                }
             }
             _ => {
                 self.text_area.input(key_event);
@@ -85,16 +84,18 @@ impl<'a> ProjectSelect<'a> {
         Ok(ProjectSelectEvent::Ignore)
     }
 
-    fn get_selected_project_id(&mut self) -> Result<i32, TuiError> {
+    fn get_selected_project_id(&mut self) -> Option<i32> {
         let Some(selected_index) = self.state.selected() else {
-            return Err(InvalidState {
-                message: "No selected project",
-            });
+            return None;
         };
+
+        if self.projects.len() <= selected_index {
+            return None;
+        }
 
         let project = &self.projects[selected_index];
 
-        Ok(project.id)
+        Some(project.id)
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, block: Block) {
@@ -134,7 +135,172 @@ impl<'a> ProjectSelect<'a> {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub enum ProjectSelectEvent {
     Selected { project_id: i32 },
     Ignore,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_utils::DBTestContext;
+    use time::macros::date;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl_key(code: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL)
+    }
+
+    fn flatten(buf: &Buffer) -> String {
+        buf.content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    fn initialze_context() -> DBTestContext {
+        let context = DBTestContext::new().unwrap();
+        let project_repository = ProjectRepository::new(context.connection());
+
+        project_repository.insert("Project A", None).unwrap();
+
+        project_repository
+            .insert("Another project", Some("With a description"))
+            .unwrap();
+
+        project_repository
+            .insert("One more", Some("With some other text"))
+            .unwrap();
+
+        context
+    }
+
+    mod new {
+        use super::*;
+
+        #[test]
+        fn creates_with_empty_query() {
+            let context = initialze_context();
+
+            let select = ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01));
+
+            assert!(select.is_ok());
+        }
+    }
+
+    mod handle_key_event {
+        use super::*;
+
+        #[test]
+        fn navigation_up_and_down() {
+            let context = initialze_context();
+
+            let mut select =
+                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
+
+            let previous_index = select.state.selected().unwrap() as i32;
+
+            select.handle_key_event(ctrl_key('k')).unwrap();
+            assert_eq!(select.state.selected().unwrap() as i32, previous_index + 1);
+
+            select.handle_key_event(ctrl_key('j')).unwrap();
+            assert_eq!(select.state.selected().unwrap() as i32, previous_index);
+
+            select.handle_key_event(key(KeyCode::Up)).unwrap();
+            assert_eq!(select.state.selected().unwrap() as i32, previous_index + 1);
+
+            select.handle_key_event(key(KeyCode::Down)).unwrap();
+            assert_eq!(select.state.selected().unwrap() as i32, previous_index);
+        }
+
+        #[test]
+        fn first_project_selected_by_default() {
+            let context = initialze_context();
+
+            let mut select =
+                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
+
+            let result = select.handle_key_event(key(KeyCode::Enter)).unwrap();
+
+            assert!(matches!(
+                result,
+                ProjectSelectEvent::Selected { project_id } if project_id == 2
+            ));
+        }
+
+        #[test]
+        fn typing_updates_query_and_refreshes_list() {
+            let context = initialze_context();
+
+            let mut select =
+                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
+
+            select.handle_key_event(key(KeyCode::Char('x'))).unwrap();
+
+            assert_eq!(select.projects.len(), 1);
+            assert_eq!(select.projects.first().unwrap().name, "One more");
+        }
+    }
+
+    mod get_selected_project_id {
+        use super::*;
+
+        #[test]
+        fn returns_selected_id() {
+            let context = initialze_context();
+
+            let mut select =
+                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
+
+            select.handle_key_event(key(KeyCode::Up)).unwrap();
+
+            let project_id = select.get_selected_project_id().unwrap();
+
+            assert_eq!(project_id, 3);
+        }
+
+        #[test]
+        fn returns_none_when_no_selection() {
+            let context = initialze_context();
+
+            let mut select =
+                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
+
+            select.state.select(None);
+
+            let result = select.get_selected_project_id();
+
+            assert!(result.is_none());
+        }
+    }
+
+    mod render {
+        use super::*;
+
+        #[test]
+        fn renders_list_and_input() {
+            let context = initialze_context();
+
+            let mut select =
+                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
+
+            let block = Block::default();
+
+            let area = Rect::new(0, 0, 60, 10);
+            let mut buf = Buffer::empty(area);
+
+            select.render(area, &mut buf, block);
+
+            let flat = flatten(&buf);
+
+            assert!(flat.contains("Project A"));
+            assert!(flat.contains("One more - With some other text"));
+            assert!(flat.contains("Another project - With a description"));
+        }
+    }
 }

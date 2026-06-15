@@ -1,6 +1,6 @@
+use crate::core::app_error::AppError;
 use crate::core::format::Format;
 use crate::core::time_format::TimeFormat;
-use crate::tui::terminal_user_interface::TuiError;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
@@ -45,7 +45,7 @@ impl<'a> ManualSessionDialog<'a> {
     pub fn handle_key_event(
         &mut self,
         key_event: KeyEvent,
-    ) -> Result<ManualSessionEvent, TuiError> {
+    ) -> Result<ManualSessionEvent, AppError> {
         match key_event.code {
             KeyCode::Esc => return Ok(ManualSessionEvent::Cancel),
             KeyCode::Enter => match self.get_value() {
@@ -66,7 +66,7 @@ impl<'a> ManualSessionDialog<'a> {
         Ok(ManualSessionEvent::Consumed)
     }
 
-    fn mark_form_invalid(&mut self, message: String) -> Result<(), TuiError> {
+    fn mark_form_invalid(&mut self, message: String) -> Result<(), AppError> {
         let new_block = Self::get_block(self.time_format)
             .border_style(Color::Red)
             .title_bottom(message);

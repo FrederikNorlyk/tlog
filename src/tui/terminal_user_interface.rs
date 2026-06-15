@@ -1,5 +1,5 @@
-use crate::core::config::{Config, ConfigError};
-use crate::core::tracking::TrackingError;
+use crate::core::app_error::AppError;
+use crate::core::config::Config;
 use crate::tui::components::project_table::ProjectTable;
 use crate::tui::components::session_table::SessionTable;
 use crossterm::event;
@@ -11,8 +11,6 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::{DefaultTerminal, Frame, buffer::Buffer, layout::Rect, widgets::Widget};
 use rusqlite::Connection;
 use std::time::{Duration, Instant};
-use thiserror::Error;
-use time::OffsetDateTime;
 
 #[derive(Eq, PartialEq)]
 enum ActiveWidget {
@@ -34,12 +32,11 @@ impl<'a> TerminalUserInterface<'a> {
     /// # Errors
     ///
     /// If `SQLite` fails to query sessions.
-    pub fn new(connection: &'a Connection) -> Result<Self, TuiError> {
-        let date = OffsetDateTime::now_utc().date();
+    pub fn new(connection: &'a Connection) -> Result<Self, AppError> {
         let time_format = Config::get()?.time_format();
 
         Ok(Self {
-            session_table: SessionTable::new(date, connection, time_format, false)?,
+            session_table: SessionTable::new(connection, time_format, false)?,
             project_table: ProjectTable::new(connection)?,
             exit: false,
             active_widget: ActiveWidget::SessionTable,
@@ -56,7 +53,7 @@ impl<'a> TerminalUserInterface<'a> {
     ///
     /// Returns an error if drawing to the terminal fails, or if reading an event
     /// from the terminal input fails.
-    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), TuiError> {
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), AppError> {
         let tick_rate = Duration::from_secs(1);
         let mut last_tick = Instant::now();
 
@@ -86,7 +83,7 @@ impl<'a> TerminalUserInterface<'a> {
         frame.render_widget(self, frame.area());
     }
 
-    fn handle_events(&mut self) -> Result<(), TuiError> {
+    fn handle_events(&mut self) -> Result<(), AppError> {
         match event::read()? {
             // it's important to check that the event is a key press event as
             // crossterm also emits key release and repeat events on Windows.
@@ -99,7 +96,7 @@ impl<'a> TerminalUserInterface<'a> {
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<(), TuiError> {
+    fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<(), AppError> {
         let result = match self.active_widget {
             ActiveWidget::SessionTable => self.session_table.handle_key_event(key_event)?,
             ActiveWidget::ProjectTable => self.project_table.handle_key_event(key_event)?,
@@ -206,22 +203,6 @@ pub enum KeyEventResult {
 #[derive(Eq, PartialEq)]
 pub enum KeybindOverlay {
     CopySession,
-}
-
-#[derive(Debug, Error)]
-pub enum TuiError {
-    #[error("Tracking error: {0}")]
-    Tracking(#[from] TrackingError),
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("SQLite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
-    #[error("Clipboard error: {0}")]
-    Clipboard(#[from] arboard::Error),
-    #[error("Invalid state: {message}")]
-    InvalidState { message: &'static str },
-    #[error("Config error: {0}")]
-    Config(#[from] ConfigError),
 }
 
 // #[cfg(test)]

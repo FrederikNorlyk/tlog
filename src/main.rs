@@ -6,9 +6,11 @@ use tlog::cli::config_command::ConfigCommand;
 use tlog::cli::project_command::handle_project_command;
 use tlog::core::config::Config;
 use tlog::core::format::Format;
+use tlog::core::time_format::TimeFormat;
 use tlog::core::tracking::Tracking;
 use tlog::db::database::Database;
 use tlog::db::project_repository::ProjectRepository;
+use tlog::model::session::Session;
 use tlog::tui::terminal_user_interface::TerminalUserInterface;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -25,8 +27,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     match command {
         Command::Project { command } => {
+            let mut stdout = std::io::stdout();
             let project_repository = ProjectRepository::new(database.connection());
-            handle_project_command(command, &project_repository)?;
+            handle_project_command(command, &project_repository, &mut stdout)?;
         }
         Command::Start { project_id } => {
             let tracking = Tracking::new(database.connection());
@@ -57,18 +60,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             let tracking = Tracking::new(database.connection());
             let mut total = 0;
             let query_date = date.unwrap_or_else(|| OffsetDateTime::now_utc().date());
+            let time_format = Config::get()?.time_format();
 
             tracking
                 .list_all_sessions(query_date)?
                 .iter()
                 .for_each(|session| {
                     total += session.total_seconds;
-                    println!("{session}");
+                    print_session(session, time_format)
                 });
 
-            let (hours, minutes, seconds) = Format::seconds_to_hms(total);
+            let duration = Format::seconds_to_duration(total, time_format);
 
-            println!("{BOLD}{hours:02}:{minutes:02}:{seconds:02}       Total{RESET}");
+            println!("{BOLD}{duration:10}      Total{RESET}");
         }
         Command::Config { command } => match command {
             ConfigCommand::Where => {
@@ -93,4 +97,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn print_session(session: &Session, time_format: TimeFormat) {
+    const LIGHT_GRAY: &str = "\x1b[90m";
+    const BOLD: &str = "\x1b[1m";
+    const RESET: &str = "\x1b[0m";
+
+    let project = &session.project;
+    let mut duration = Format::seconds_to_duration(session.total_seconds, time_format);
+
+    if session.is_started {
+        duration.push('*')
+    }
+
+    println!("{BOLD}{duration:10}{RESET}  {LIGHT_GRAY}{project}{RESET}",)
 }

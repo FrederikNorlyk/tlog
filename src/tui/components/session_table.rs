@@ -1,3 +1,4 @@
+use crate::core::app_error::AppError;
 use crate::core::config::Config;
 use crate::core::format::Format;
 use crate::core::time_format::TimeFormat;
@@ -6,8 +7,7 @@ use crate::model::session::Session;
 use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
 use crate::tui::components::manual_session_dialog::{ManualSessionDialog, ManualSessionEvent};
 use crate::tui::components::project_select::{ProjectSelect, ProjectSelectEvent};
-use crate::tui::terminal_user_interface::TuiError::InvalidState;
-use crate::tui::terminal_user_interface::{KeyEventResult, KeybindOverlay, TuiError};
+use crate::tui::terminal_user_interface::{KeyEventResult, KeybindOverlay};
 use arboard::Clipboard;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Alignment, Constraint};
@@ -23,7 +23,8 @@ use ratatui::{
     widgets::{Block, Cell, Row, StatefulWidget, Table, TableState, Widget},
 };
 use rusqlite::Connection;
-use time::Date;
+use time::macros::format_description;
+use time::{Date, Duration, OffsetDateTime};
 
 pub struct SessionTable<'a> {
     sessions: Vec<Session>,
@@ -44,11 +45,11 @@ impl<'a> SessionTable<'a> {
     ///
     /// If `SQLite` fails to query sessions
     pub fn new(
-        date: Date,
         connection: &'a Connection,
         time_format: TimeFormat,
         is_showing_copy_keybinds: bool,
     ) -> rusqlite::Result<Self> {
+        let date = OffsetDateTime::now_utc().date();
         let mut state = TableState::default();
         let tracking = Tracking::new(connection);
         let sessions = tracking.list_all_sessions(date)?;
@@ -127,7 +128,12 @@ impl<'a> SessionTable<'a> {
             Constraint::Length(duration_width),
         ];
 
-        let title = Line::from(" [2] Sessions ");
+        let title = if self.date == OffsetDateTime::now_utc().date() {
+            " [2] Today".to_string()
+        } else {
+            let format = format_description!("[weekday repr:long], [day] [month repr:long] [year]");
+            format!(" [2] {}", self.date.format(&format).unwrap())
+        };
 
         let mut table_block = Block::bordered().title(title).border_set(border::THICK);
 
@@ -187,7 +193,7 @@ impl<'a> SessionTable<'a> {
     /// # Errors
     ///
     /// Returns an error if executing user commands fails.
-    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, TuiError> {
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, AppError> {
         if let Some(project_select) = &mut self.project_select {
             if key_event.code == KeyCode::Esc {
                 self.project_select = None;
@@ -256,6 +262,8 @@ impl<'a> SessionTable<'a> {
         let mut did_match = true;
 
         match key_event.code {
+            KeyCode::Char('h') | KeyCode::Left => self.shift_date(Duration::days(-1))?,
+            KeyCode::Char('l') | KeyCode::Right => self.shift_date(Duration::days(1))?,
             KeyCode::Char('j') | KeyCode::Down => self.state.select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.state.select_previous(),
             KeyCode::Char('g') | KeyCode::Home => self.state.select_first(),
@@ -285,9 +293,22 @@ impl<'a> SessionTable<'a> {
         Ok(KeyEventResult::Unused)
     }
 
-    fn toggle_session(&mut self) -> Result<(), TuiError> {
+    fn shift_date(&mut self, duration: Duration) -> Result<(), AppError> {
+        // Overflowing current date is not an issue so using expect here is fine.
+        self.date = self
+            .date
+            .checked_add(duration)
+            .expect("Could not shift date");
+
+        let tracking = Tracking::new(self.connection);
+        self.sessions = tracking.list_all_sessions(self.date)?;
+
+        Ok(())
+    }
+
+    fn toggle_session(&mut self) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
-            return Err(InvalidState {
+            return Err(AppError::InvalidState {
                 message: "No selected session",
             });
         };
@@ -299,9 +320,9 @@ impl<'a> SessionTable<'a> {
         Ok(())
     }
 
-    fn reset_session(&mut self) -> Result<(), TuiError> {
+    fn reset_session(&mut self) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
-            return Err(InvalidState {
+            return Err(AppError::InvalidState {
                 message: "No selected session",
             });
         };
@@ -313,7 +334,7 @@ impl<'a> SessionTable<'a> {
         Ok(())
     }
 
-    fn cycle_time_format(&mut self) -> Result<(), TuiError> {
+    fn cycle_time_format(&mut self) -> Result<(), AppError> {
         self.time_format = self.time_format.get_next_format();
         Config::set_time_format(self.time_format)?;
         Ok(())
@@ -324,9 +345,9 @@ impl<'a> SessionTable<'a> {
         copy_name: bool,
         copy_description: bool,
         copy_time: bool,
-    ) -> Result<(), TuiError> {
+    ) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
-            return Err(InvalidState {
+            return Err(AppError::InvalidState {
                 message: "No selected session",
             });
         };
@@ -368,9 +389,9 @@ impl<'a> SessionTable<'a> {
         Some(session)
     }
 
-    fn set_manual_session(&mut self, total_seconds: i64) -> Result<(), TuiError> {
+    fn set_manual_session(&mut self, total_seconds: i64) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
-            return Err(InvalidState {
+            return Err(AppError::InvalidState {
                 message: "No selected session",
             });
         };
