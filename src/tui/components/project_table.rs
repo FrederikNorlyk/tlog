@@ -1,9 +1,9 @@
+use crate::core::app_error::AppError;
 use crate::db::project_repository::ProjectRepository;
 use crate::model::project::Project;
 use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
 use crate::tui::components::project_form::{ProjectForm, ProjectFormEvent};
-use crate::tui::terminal_user_interface::TuiError::InvalidState;
-use crate::tui::terminal_user_interface::{KeyEventResult, TuiError};
+use crate::tui::terminal_user_interface::KeyEventResult;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
@@ -22,7 +22,7 @@ pub struct ProjectTable<'a> {
 }
 
 impl<'a> ProjectTable<'a> {
-    pub fn new(connection: &'a Connection) -> rusqlite::Result<Self> {
+    pub fn new(connection: &'a Connection) -> Result<Self, AppError> {
         let project_repository = ProjectRepository::new(connection);
 
         let mut projects = Vec::new();
@@ -99,7 +99,7 @@ impl<'a> ProjectTable<'a> {
     /// # Errors
     ///
     /// Returns an error if executing user commands fails.
-    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, TuiError> {
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, AppError> {
         if self.is_showing_deletion_alert_dialog {
             match AlertDialog::handle_key_code(key_event.code) {
                 AlertDialogEvent::Confirm => {
@@ -152,9 +152,9 @@ impl<'a> ProjectTable<'a> {
         Ok(KeyEventResult::Unused)
     }
 
-    fn delete_project(&mut self) -> Result<(), TuiError> {
+    fn delete_project(&mut self) -> Result<(), AppError> {
         let Some(project) = self.get_selected_project() else {
-            return Err(InvalidState {
+            return Err(AppError::InvalidState {
                 message: "No selected project",
             });
         };
@@ -170,7 +170,7 @@ impl<'a> ProjectTable<'a> {
         &mut self,
         name: String,
         description: Option<String>,
-    ) -> Result<(), TuiError> {
+    ) -> Result<(), AppError> {
         let project_repository = ProjectRepository::new(self.connection);
         project_repository.insert(name.as_str(), description.as_deref())?;
         self.refresh_projects()?;
@@ -178,7 +178,7 @@ impl<'a> ProjectTable<'a> {
         Ok(())
     }
 
-    fn refresh_projects(&mut self) -> Result<(), TuiError> {
+    fn refresh_projects(&mut self) -> Result<(), AppError> {
         let project_repository = ProjectRepository::new(self.connection);
 
         self.projects.clear();
@@ -196,8 +196,276 @@ impl<'a> ProjectTable<'a> {
             return None;
         };
 
-        let session = &self.projects[selected_index];
+        self.projects.get(selected_index)
+    }
+}
 
-        Some(session)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_utils::DBTestContext;
+    use crossterm::event::KeyModifiers;
+
+    fn initialze_context() -> DBTestContext {
+        let context = DBTestContext::new().unwrap();
+        let project_repository = ProjectRepository::new(context.connection());
+
+        project_repository.insert("Project A", None).unwrap();
+
+        project_repository
+            .insert("Another project", Some("With a description"))
+            .unwrap();
+
+        project_repository
+            .insert("One more", Some("With some other text"))
+            .unwrap();
+
+        context
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    mod render {
+        use super::*;
+
+        fn flatten(buf: &Buffer) -> String {
+            let area = buf.area();
+            let width = area.width as usize;
+
+            buf.content()
+                .chunks(width)
+                .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        #[test]
+        fn table_of_projects() {
+            let context = initialze_context();
+            let mut table = ProjectTable::new(&context.connection()).unwrap();
+            let area = Rect::new(0, 0, 60, 5);
+            let mut buf = Buffer::empty(area);
+
+            table.render(area, &mut buf, true);
+
+            let expected = Buffer::with_lines(vec![
+                "┏ [1] Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┃Another project With a description                        ┃",
+                "┃One more        With some other text                      ┃",
+                "┃Project A                                                 ┃",
+                "┗━━━━ Use g/G to go top/bottom, a to add a new project ━━━━┛",
+            ]);
+
+            assert_eq!(flatten(&buf), flatten(&expected));
+        }
+
+        #[test]
+        fn project_form() {
+            let context = initialze_context();
+            let mut table = ProjectTable::new(&context.connection()).unwrap();
+            table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
+            let area = Rect::new(0, 0, 70, 17);
+            let mut buf = Buffer::empty(area);
+
+            table.render(area, &mut buf, true);
+
+            let expected = Buffer::with_lines(vec![
+                "┏ [1] Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┃Another project With a description                                  ┃",
+                "┃One more        With some other text                                ┃",
+                "┃Project A                                                           ┃",
+                "┃    ┌───────────────────────────────────────────────────── Esc ┐    ┃",
+                "┃    │┌Name────────────────────────────────────────────────────┐│    ┃",
+                "┃    ││                                                        ││    ┃",
+                "┃    │└────────────────────────────────────────────────────────┘│    ┃",
+                "┃    │┌Description─────────────────────────────────────────────┐│    ┃",
+                "┃    ││                                                        ││    ┃",
+                "┃    ││                                                        ││    ┃",
+                "┃    ││                                                        ││    ┃",
+                "┃    │└────────────────────────────────────────────────────────┘│    ┃",
+                "┃    └──────────────────────────────────────────────────────────┘    ┃",
+                "┃                                                                    ┃",
+                "┃                                                                    ┃",
+                "┗━━━━━━━━━ Use g/G to go top/bottom, a to add a new project ━━━━━━━━━┛",
+            ]);
+
+            assert_eq!(flatten(&buf), flatten(&expected));
+        }
+
+        #[test]
+        fn delete_dialog() {
+            let context = initialze_context();
+            let mut table = ProjectTable::new(&context.connection()).unwrap();
+            table.handle_key_event(key(KeyCode::Down)).unwrap();
+            table.handle_key_event(key(KeyCode::Char('d'))).unwrap();
+            let area = Rect::new(0, 0, 70, 13);
+            let mut buf = Buffer::empty(area);
+
+            table.render(area, &mut buf, true);
+
+            let expected = Buffer::with_lines(vec![
+                "┏ [1] Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┃Another project With a description                                  ┃",
+                "┃One more        With some other text                                ┃",
+                "┃Project A                                                           ┃",
+                "┃    ┌───────────────────────────────────────────────────── Esc ┐    ┃",
+                "┃    │You are about to delete a project                         │    ┃",
+                "┃    │                                                          │    ┃",
+                "┃    │                                                          │    ┃",
+                "┃    │                                                          │    ┃",
+                "┃    └────────────────y to delete, n to cancel ─────────────────┘    ┃",
+                "┃                                                                    ┃",
+                "┃                                                                    ┃",
+                "┗━━━━━━━━━ Use g/G to go top/bottom, a to add a new project ━━━━━━━━━┛",
+            ]);
+
+            assert_eq!(flatten(&buf), flatten(&expected));
+        }
+    }
+
+    mod handle_key_event {
+        use super::*;
+
+        #[test]
+        fn is_showing_delete_alert_dialog() {
+            let context = initialze_context();
+            let mut table = ProjectTable::new(&context.connection()).unwrap();
+
+            // Select first row and press 'd' to show delete dialog
+            assert_eq!(table.is_showing_deletion_alert_dialog, false);
+            table.handle_key_event(key(KeyCode::Down)).unwrap();
+            table.handle_key_event(key(KeyCode::Char('d'))).unwrap();
+            assert_eq!(table.is_showing_deletion_alert_dialog, true);
+
+            // Verify keys unused by the dialog doesn't close it
+            let event = table.handle_key_event(key(KeyCode::Char('x'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert_eq!(table.is_showing_deletion_alert_dialog, true);
+
+            // Verify that the dialog can be closed, and that it does not trigger deletion
+            let event = table.handle_key_event(key(KeyCode::Char('n'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert_eq!(table.is_showing_deletion_alert_dialog, false);
+            assert_eq!(table.projects.len(), 3);
+
+            // Press 'd' to show delete dialog
+            table.handle_key_event(key(KeyCode::Char('d'))).unwrap();
+            assert_eq!(table.is_showing_deletion_alert_dialog, true);
+
+            // Verify that confirming deletion deletes a project
+            table.handle_key_event(key(KeyCode::Char('y'))).unwrap();
+            assert_eq!(table.is_showing_deletion_alert_dialog, false);
+            assert_eq!(table.projects.len(), 2);
+        }
+
+        #[test]
+        fn is_showing_project_form() {
+            let context = initialze_context();
+            let mut table = ProjectTable::new(&context.connection()).unwrap();
+
+            // Press 'a' to show project form
+            assert!(table.project_form.is_none());
+            table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
+            assert!(table.project_form.is_some());
+
+            // Verify that typing text is consumed by the form
+            let event = table.handle_key_event(key(KeyCode::Char('u'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.project_form.is_some());
+
+            // Verify that pressing Esc closes the form
+            let event = table.handle_key_event(key(KeyCode::Esc)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.project_form.is_none());
+
+            // Press 'a' to show project form
+            table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
+            assert!(table.project_form.is_some());
+
+            // Fill out description
+            table.handle_key_event(key(KeyCode::Tab)).unwrap();
+            table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
+
+            // Verify that name is required
+            table.handle_key_event(key(KeyCode::Enter)).unwrap();
+            assert!(table.project_form.is_some());
+
+            // Fill out name
+            table.handle_key_event(key(KeyCode::Tab)).unwrap();
+            table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
+            assert!(table.project_form.is_some());
+
+            // Verify that saving the form closes it
+            table.handle_key_event(key(KeyCode::Enter)).unwrap();
+            assert!(table.project_form.is_none());
+        }
+
+        #[test]
+        fn navigation() {
+            let context = initialze_context();
+            let mut table = ProjectTable::new(&context.connection()).unwrap();
+
+            assert!(table.get_selected_project().is_none());
+            table.handle_key_event(key(KeyCode::Char('j'))).unwrap();
+            assert!(table.get_selected_project().is_some());
+
+            // Projects are ordered by name, so the order is:
+            // id = 2
+            // id = 3
+            // id = 1
+
+            // Navigate down with 'j'
+            let event = table.handle_key_event(key(KeyCode::Char('j'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            let selected_project = table.get_selected_project().unwrap();
+            assert_eq!(selected_project.id, 3);
+
+            // Navigate up with 'k'
+            let event = table.handle_key_event(key(KeyCode::Char('k'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            let selected_project = table.get_selected_project().unwrap();
+            assert_eq!(selected_project.id, 2);
+
+            // Navigate down with arrow down
+            let event = table.handle_key_event(key(KeyCode::Down)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            let selected_project = table.get_selected_project().unwrap();
+            assert_eq!(selected_project.id, 3);
+
+            // Navigate up with arrow up
+            let event = table.handle_key_event(key(KeyCode::Up)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            let selected_project = table.get_selected_project().unwrap();
+            assert_eq!(selected_project.id, 2);
+        }
+
+        #[test]
+        fn force_delete() {
+            let context = initialze_context();
+            let mut table = ProjectTable::new(&context.connection()).unwrap();
+
+            assert_eq!(table.projects.len(), 3);
+
+            // Select first row
+            table.handle_key_event(key(KeyCode::Char('j'))).unwrap();
+
+            // Force delete with 'D' key
+            table.handle_key_event(key(KeyCode::Char('D'))).unwrap();
+
+            assert_eq!(table.projects.len(), 2);
+            assert_eq!(table.projects.first().unwrap().id, 3);
+            assert_eq!(table.projects.get(1).unwrap().id, 1);
+        }
+
+        #[test]
+        fn unused_key() {
+            let context = initialze_context();
+            let mut table = ProjectTable::new(&context.connection()).unwrap();
+
+            let event = table.handle_key_event(key(KeyCode::Char('w'))).unwrap();
+            assert_eq!(event, KeyEventResult::Unused);
+        }
     }
 }

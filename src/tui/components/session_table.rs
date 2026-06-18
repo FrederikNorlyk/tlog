@@ -47,9 +47,9 @@ impl<'a> SessionTable<'a> {
     pub fn new(
         connection: &'a Connection,
         time_format: TimeFormat,
+        date: Date,
         is_showing_copy_keybinds: bool,
     ) -> rusqlite::Result<Self> {
-        let date = OffsetDateTime::now_utc().date();
         let mut state = TableState::default();
         let tracking = Tracking::new(connection);
         let sessions = tracking.list_all_sessions(date)?;
@@ -242,10 +242,11 @@ impl<'a> SessionTable<'a> {
             let mut did_match = true;
 
             match key_event.code {
-                KeyCode::Char('c') => self.copy_to_clipboard(true, true, true)?,
-                KeyCode::Char('n') => self.copy_to_clipboard(true, false, false)?,
-                KeyCode::Char('d') => self.copy_to_clipboard(false, true, false)?,
-                KeyCode::Char('t') => self.copy_to_clipboard(false, false, true)?,
+                KeyCode::Char('c') => self.copy_to_clipboard(CopyContent::All)?,
+                KeyCode::Char('n') => self.copy_to_clipboard(CopyContent::Name)?,
+                KeyCode::Char('d') => self.copy_to_clipboard(CopyContent::Description)?,
+                KeyCode::Char('t') => self.copy_to_clipboard(CopyContent::Time)?,
+                KeyCode::Char('p') => self.copy_to_clipboard(CopyContent::Project)?,
                 KeyCode::Esc => {}
                 _ => did_match = false,
             }
@@ -340,37 +341,52 @@ impl<'a> SessionTable<'a> {
         Ok(())
     }
 
-    fn copy_to_clipboard(
-        &self,
-        copy_name: bool,
-        copy_description: bool,
-        copy_time: bool,
-    ) -> Result<(), AppError> {
+    fn copy_to_clipboard(&self, copy_content: CopyContent) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
             return Err(AppError::InvalidState {
                 message: "No selected session",
             });
         };
 
-        let mut output = Vec::new();
+        let text = match copy_content {
+            CopyContent::All => {
+                let mut output = Vec::new();
+                output.push(Self::escape_semicolon(session.project.name.clone()));
+                if let Some(description) = &session.project.description {
+                    output.push(Self::escape_semicolon(description.clone()));
+                }
 
-        if copy_name {
-            output.push(Self::escape_semicolon(session.project.name.clone()));
-        }
+                output.push(Format::seconds_to_duration(
+                    session.total_seconds,
+                    self.time_format,
+                ));
 
-        if copy_description && let Some(description) = &session.project.description {
-            output.push(Self::escape_semicolon(description.clone()));
-        }
+                output.join(";")
+            }
+            CopyContent::Name => Self::escape_semicolon(session.project.name.clone()),
+            CopyContent::Description => {
+                if let Some(description) = session.project.description.clone() {
+                    Self::escape_semicolon(description)
+                } else {
+                    "".to_string()
+                }
+            }
+            CopyContent::Time => {
+                Format::seconds_to_duration(session.total_seconds, self.time_format)
+            }
+            CopyContent::Project => {
+                let mut project = Self::escape_semicolon(session.project.name.clone());
+                if let Some(description) = &session.project.description {
+                    project.push_str(" - ");
+                    project.push_str(Self::escape_semicolon(description.clone()).as_str());
+                }
 
-        if copy_time {
-            output.push(Format::seconds_to_duration(
-                session.total_seconds,
-                self.time_format,
-            ));
-        }
+                project
+            }
+        };
 
         let mut clipboard = Clipboard::new()?;
-        clipboard.set_text(output.join(";"))?;
+        clipboard.set_text(text)?;
 
         Ok(())
     }
@@ -384,9 +400,7 @@ impl<'a> SessionTable<'a> {
             return None;
         };
 
-        let session = &self.sessions[selected_index];
-
-        Some(session)
+        self.sessions.get(selected_index)
     }
 
     fn set_manual_session(&mut self, total_seconds: i64) -> Result<(), AppError> {
@@ -402,5 +416,449 @@ impl<'a> SessionTable<'a> {
         self.sessions = tracking.list_all_sessions(self.date)?;
 
         Ok(())
+    }
+}
+
+enum CopyContent {
+    All,
+    Name,
+    Description,
+    Time,
+    Project,
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::db::event_repository::EventRepository;
+    use crate::db::manual_session_repository::ManualSessionRepository;
+    use crate::db::project_repository::ProjectRepository;
+    use crate::db::test_utils::DBTestContext;
+    use crate::model::event::EventType;
+    use crossterm::event::KeyModifiers;
+    use time::{Month, PrimitiveDateTime, Time};
+
+    fn initialze_context() -> DBTestContext {
+        let context = DBTestContext::new().unwrap();
+        let project_repository = ProjectRepository::new(context.connection());
+
+        project_repository.insert("Project A", None).unwrap();
+
+        project_repository
+            .insert("Another project", Some("With a description"))
+            .unwrap();
+
+        project_repository
+            .insert("One more", Some("With some other text"))
+            .unwrap();
+
+        let event_repository = EventRepository::new(context.connection());
+
+        let start_date = get_test_date();
+        let time = Time::from_hms(2, 30, 00).unwrap();
+
+        let mut timestamp = PrimitiveDateTime::new(start_date, time)
+            .assume_utc()
+            .unix_timestamp();
+
+        event_repository
+            .insert(1, EventType::Start, timestamp)
+            .unwrap();
+
+        // 1 hour 30 min 30 seconds
+        timestamp += 5430;
+
+        event_repository
+            .insert(1, EventType::Stop, timestamp)
+            .unwrap();
+
+        let manual_session_repository = ManualSessionRepository::new(context.connection());
+
+        // 15 min = 900 sec
+        manual_session_repository
+            .upsert(2, start_date, 900)
+            .unwrap();
+
+        context
+    }
+
+    fn get_test_date() -> Date {
+        Date::from_calendar_date(2024, Month::September, 20).unwrap()
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    mod render {
+        use super::*;
+
+        fn flatten(buf: &Buffer) -> String {
+            let area = buf.area();
+            let width = area.width as usize;
+
+            buf.content()
+                .chunks(width)
+                .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        #[test]
+        fn table_of_sessions() {
+            let context = initialze_context();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                get_test_date(),
+                false,
+            )
+            .unwrap();
+
+            let area = Rect::new(0, 0, 110, 6);
+            let mut buf = Buffer::empty(area);
+
+            table.render(area, &mut buf, true);
+
+            let expected = Buffer::with_lines(vec![
+                "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┃Another project With a description                                                                     00:15┃",
+                "┃Project A                                                                                              01:31┃",
+                "┃                                                                                                            ┃",
+                "┃Total                                                                                                  01:46┃",
+                "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
+            ]);
+
+            assert_eq!(flatten(&buf), flatten(&expected));
+        }
+
+        #[test]
+        fn today_in_title() {
+            let context = initialze_context();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                OffsetDateTime::now_utc().date(),
+                false,
+            )
+            .unwrap();
+
+            let area = Rect::new(0, 0, 110, 6);
+            let mut buf = Buffer::empty(area);
+
+            table.render(area, &mut buf, true);
+
+            let expected = Buffer::with_lines(vec![
+                "┏ [2] Today━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┃                                                                                                            ┃",
+                "┃                                                                                                            ┃",
+                "┃                                                                                                            ┃",
+                "┃Total                                                                                                  00:00┃",
+                "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
+            ]);
+
+            assert_eq!(flatten(&buf), flatten(&expected));
+        }
+
+        #[test]
+        fn project_select() {
+            let context = initialze_context();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                get_test_date(),
+                false,
+            )
+            .unwrap();
+
+            table.handle_key_event(key(KeyCode::Char('s'))).unwrap();
+
+            let area = Rect::new(0, 0, 110, 10);
+            let mut buf = Buffer::empty(area);
+
+            table.render(area, &mut buf, true);
+
+            let expected = Buffer::with_lines(vec![
+                "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┃Another project With a description                                                                     00:15┃",
+                "┃Project A            ┌─────────────────────────────────────────────────────────── Esc ┐                01:31┃",
+                "┃                     │                                                                │                     ┃",
+                "┃                     │                                                                │                     ┃",
+                "┃                     │One more - With some other text                                 │                     ┃",
+                "┃                     │                                                                │                     ┃",
+                "┃                     └────────────────────────────────────────────────────────────────┘                     ┃",
+                "┃Total                                                                                                  01:46┃",
+                "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
+            ]);
+
+            assert_eq!(flatten(&buf), flatten(&expected));
+        }
+
+        #[test]
+        fn reset_alert_dialog() {
+            let context = initialze_context();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                get_test_date(),
+                false,
+            )
+            .unwrap();
+
+            table.handle_key_event(key(KeyCode::Char('d'))).unwrap();
+
+            let area = Rect::new(0, 0, 110, 10);
+            let mut buf = Buffer::empty(area);
+
+            table.render(area, &mut buf, true);
+
+            let expected = Buffer::with_lines(vec![
+                "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┃Another project With a description                                                                     00:15┃",
+                "┃Project A               ┌───────────────────────────────────────────────────── Esc ┐                   01:31┃",
+                "┃                        │You are about to reset the session                        │                        ┃",
+                "┃                        │                                                          │                        ┃",
+                "┃                        │                                                          │                        ┃",
+                "┃                        │                                                          │                        ┃",
+                "┃                        └────────────────y to delete, n to cancel ─────────────────┘                        ┃",
+                "┃Total                                                                                                  01:46┃",
+                "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
+            ]);
+
+            assert_eq!(flatten(&buf), flatten(&expected));
+        }
+
+        #[test]
+        fn manual_session_dialog() {
+            let context = initialze_context();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                get_test_date(),
+                false,
+            )
+            .unwrap();
+
+            table.handle_key_event(key(KeyCode::Char('S'))).unwrap();
+
+            let area = Rect::new(0, 0, 110, 11);
+            let mut buf = Buffer::empty(area);
+
+            table.render(area, &mut buf, true);
+
+            let expected = Buffer::with_lines(vec![
+                "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┃Another project With a description                                                                     00:15┃",
+                "┃Project A                                                                                              01:31┃",
+                "┃                        ┌───────────────────────────────────────────────────── Esc ┐                        ┃",
+                "┃                        │┌Hours and minutes [00:00]───────────────────────────────┐│                        ┃",
+                "┃                        ││                                                        ││                        ┃",
+                "┃                        │└────────────────────────────────────────────────────────┘│                        ┃",
+                "┃                        └──────────────────────────────────────────────────────────┘                        ┃",
+                "┃                                                                                                            ┃",
+                "┃Total                                                                                                  01:46┃",
+                "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
+            ]);
+
+            assert_eq!(flatten(&buf), flatten(&expected));
+        }
+    }
+
+    mod handle_key_event {
+        use super::*;
+
+        #[test]
+        fn navigation() {
+            let context = initialze_context();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                get_test_date(),
+                false,
+            )
+            .unwrap();
+
+            assert!(table.get_selected_session().is_some());
+
+            // Go down by pressing 'j'
+            let event = table.handle_key_event(key(KeyCode::Char('j'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert_eq!(table.get_selected_session().unwrap().project.id, 1);
+
+            // Go up by pressing 'k'
+            let event = table.handle_key_event(key(KeyCode::Char('k'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert_eq!(table.get_selected_session().unwrap().project.id, 2);
+
+            // Go down by pressing Down arrow
+            let event = table.handle_key_event(key(KeyCode::Down)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert_eq!(table.get_selected_session().unwrap().project.id, 1);
+
+            // Go up by pressing Up arrow
+            let event = table.handle_key_event(key(KeyCode::Up)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert_eq!(table.get_selected_session().unwrap().project.id, 2);
+
+            // Go to previous date using 'h' key
+            let event = table.handle_key_event(key(KeyCode::Char('h'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+
+            assert_eq!(
+                table.date,
+                Date::from_calendar_date(2024, Month::September, 19).unwrap()
+            );
+
+            // Go to previous date using the left arrow
+            let event = table.handle_key_event(key(KeyCode::Left)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+
+            assert_eq!(
+                table.date,
+                Date::from_calendar_date(2024, Month::September, 18).unwrap()
+            );
+
+            // Go to next date using 'l' key
+            let event = table.handle_key_event(key(KeyCode::Char('l'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+
+            assert_eq!(
+                table.date,
+                Date::from_calendar_date(2024, Month::September, 19).unwrap()
+            );
+
+            // Go to next date using the right arrow
+            let event = table.handle_key_event(key(KeyCode::Right)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+
+            assert_eq!(
+                table.date,
+                Date::from_calendar_date(2024, Month::September, 20).unwrap()
+            );
+        }
+
+        #[test]
+        fn delete() {
+            let context = initialze_context();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                get_test_date(),
+                false,
+            )
+            .unwrap();
+
+            let event = table.handle_key_event(key(KeyCode::Char('d'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.is_showing_reset_alert_dialog);
+
+            let event = table.handle_key_event(key(KeyCode::Char('x'))).unwrap();
+            assert_eq!(event, KeyEventResult::Unused);
+            assert!(table.is_showing_reset_alert_dialog);
+
+            let event = table.handle_key_event(key(KeyCode::Char('n'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(!table.is_showing_reset_alert_dialog);
+
+            let event = table.handle_key_event(key(KeyCode::Char('d'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.is_showing_reset_alert_dialog);
+
+            let event = table.handle_key_event(key(KeyCode::Esc)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(!table.is_showing_reset_alert_dialog);
+
+            let event = table.handle_key_event(key(KeyCode::Char('d'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.is_showing_reset_alert_dialog);
+
+            let event = table.handle_key_event(key(KeyCode::Char('y'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(!table.is_showing_reset_alert_dialog);
+            assert_eq!(table.sessions.len(), 1);
+
+            let event = table.handle_key_event(key(KeyCode::Char('D'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(!table.is_showing_reset_alert_dialog);
+            assert!(table.sessions.is_empty());
+        }
+
+        #[test]
+        fn manual_session() {
+            let context = initialze_context();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                get_test_date(),
+                false,
+            )
+            .unwrap();
+
+            let event = table.handle_key_event(key(KeyCode::Char('S'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.manual_session_dialog.is_some());
+
+            let event = table.handle_key_event(key(KeyCode::Char('Q'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.manual_session_dialog.is_some());
+
+            let event = table.handle_key_event(key(KeyCode::Esc)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.manual_session_dialog.is_none());
+
+            let event = table.handle_key_event(key(KeyCode::Char('S'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.manual_session_dialog.is_some());
+
+            let event = table.handle_key_event(key(KeyCode::Char('1'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+
+            let event = table.handle_key_event(key(KeyCode::Enter)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.manual_session_dialog.is_none());
+        }
+
+        #[test]
+        fn project_select() {
+            let context = initialze_context();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                get_test_date(),
+                false,
+            )
+            .unwrap();
+
+            assert!(table.project_select.is_none());
+
+            let event = table.handle_key_event(key(KeyCode::Char('s'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.project_select.is_some());
+
+            let event = table.handle_key_event(key(KeyCode::Esc)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.project_select.is_none());
+
+            let event = table.handle_key_event(key(KeyCode::Char('s'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.project_select.is_some());
+
+            let event = table.handle_key_event(key(KeyCode::Char('x'))).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.project_select.is_some());
+
+            let event = table.handle_key_event(key(KeyCode::Enter)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            assert!(table.project_select.is_none());
+        }
     }
 }

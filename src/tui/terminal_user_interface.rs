@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::{DefaultTerminal, Frame, buffer::Buffer, layout::Rect, widgets::Widget};
 use rusqlite::Connection;
 use std::time::{Duration, Instant};
+use time::OffsetDateTime;
 
 #[derive(Eq, PartialEq)]
 enum ActiveWidget {
@@ -34,9 +35,10 @@ impl<'a> TerminalUserInterface<'a> {
     /// If `SQLite` fails to query sessions.
     pub fn new(connection: &'a Connection) -> Result<Self, AppError> {
         let time_format = Config::get()?.time_format();
+        let date = OffsetDateTime::now_utc().date();
 
         Ok(Self {
-            session_table: SessionTable::new(connection, time_format, false)?,
+            session_table: SessionTable::new(connection, time_format, date, false)?,
             project_table: ProjectTable::new(connection)?,
             exit: false,
             active_widget: ActiveWidget::SessionTable,
@@ -178,6 +180,8 @@ impl Widget for &mut TerminalUserInterface<'_> {
                     " copy description ".into(),
                     "t".blue().bold(),
                     " copy time ".into(),
+                    "p".blue().bold(),
+                    " copy project ".into(),
                 ]),
             };
 
@@ -193,14 +197,14 @@ impl Widget for &mut TerminalUserInterface<'_> {
     }
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum KeyEventResult {
     Unused,
     Consumed,
     ShowKeybindOverlay { overlay: KeybindOverlay },
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum KeybindOverlay {
     CopySession,
 }
