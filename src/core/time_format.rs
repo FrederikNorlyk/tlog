@@ -10,6 +10,7 @@ pub enum TimeFormat {
 }
 
 impl TimeFormat {
+    #[must_use]
     pub fn get_next_format(self) -> TimeFormat {
         match self {
             TimeFormat::HoursMinutesSeconds => TimeFormat::HoursMinutes,

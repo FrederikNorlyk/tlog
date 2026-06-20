@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .iter()
                 .for_each(|session| {
                     total += session.total_seconds;
-                    print_session(session, time_format)
+                    print_session(session, time_format);
                 });
 
             let duration = Format::seconds_to_duration(total, time_format);
@@ -108,8 +108,8 @@ fn print_session(session: &Session, time_format: TimeFormat) {
     let mut duration = Format::seconds_to_duration(session.total_seconds, time_format);
 
     if session.is_started {
-        duration.push('*')
+        duration.push('*');
     }
 
-    println!("{BOLD}{duration:10}{RESET}  {LIGHT_GRAY}{project}{RESET}",)
+    println!("{BOLD}{duration:10}{RESET}  {LIGHT_GRAY}{project}{RESET}");
 }

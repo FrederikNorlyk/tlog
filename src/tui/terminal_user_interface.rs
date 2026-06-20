@@ -109,7 +109,7 @@ impl<'a> TerminalUserInterface<'a> {
         {
             match overlay {
                 KeybindOverlay::CopySession => {
-                    self.session_table.set_is_showing_copy_keybinds(false)
+                    self.session_table.set_is_showing_copy_keybinds(false);
                 }
             }
             self.active_overlay = None;
@@ -117,7 +117,7 @@ impl<'a> TerminalUserInterface<'a> {
 
         match result {
             KeyEventResult::Unused => match key_event.code {
-                KeyCode::Char('q') | KeyCode::Char('Q') => self.exit(),
+                KeyCode::Char('q' | 'Q') => self.exit(),
                 KeyCode::Char('1') => self.active_widget = ActiveWidget::ProjectTable,
                 KeyCode::Char('2') => self.active_widget = ActiveWidget::SessionTable,
                 _ => {}
@@ -185,7 +185,7 @@ impl Widget for &mut TerminalUserInterface<'_> {
                 ]),
             };
 
-            Clear::default().render(overlay_area, buf);
+            Clear.render(overlay_area, buf);
 
             let block = Block::new().bg(Color::DarkGray);
             block.render(overlay_area, buf);

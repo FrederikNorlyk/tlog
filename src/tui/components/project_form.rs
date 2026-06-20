@@ -1,10 +1,9 @@
-use crate::core::app_error::AppError;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::{Color, Modifier, Stylize, Widget};
 use ratatui::style::Style;
-use ratatui::widgets::{Block, Borders, Clear};
+use ratatui::widgets::{Block, Borders, Clear, Shadow};
 use ratatui_textarea::TextArea;
 
 pub struct ProjectForm<'a> {
@@ -13,9 +12,10 @@ pub struct ProjectForm<'a> {
     is_name_focused: bool,
 }
 
-impl<'a> ProjectForm<'a> {
+impl ProjectForm<'_> {
+    #[must_use]
     pub fn new(name: Option<String>, description: Option<String>) -> Self {
-        let mut name_text_area = TextArea::new(vec![name.clone().unwrap_or_default()]);
+        let mut name_text_area = TextArea::new(vec![name.unwrap_or_default()]);
         name_text_area.set_style(Style::default().fg(Color::DarkGray));
 
         name_text_area.set_block(
@@ -25,8 +25,7 @@ impl<'a> ProjectForm<'a> {
                 .title("Name"),
         );
 
-        let mut description_text_area =
-            TextArea::new(vec![description.clone().unwrap_or_default()]);
+        let mut description_text_area = TextArea::new(vec![description.unwrap_or_default()]);
 
         description_text_area.set_style(Style::default().fg(Color::DarkGray));
 
@@ -46,17 +45,17 @@ impl<'a> ProjectForm<'a> {
         }
     }
 
-    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<ProjectFormEvent, AppError> {
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> ProjectFormEvent {
         match key_event.code {
-            KeyCode::Esc => return Ok(ProjectFormEvent::Cancel),
+            KeyCode::Esc => return ProjectFormEvent::Cancel,
             KeyCode::Tab => self.toggle_focused_field(),
             KeyCode::Enter => {
-                let is_valid = self.validate_form()?;
+                let is_valid = self.validate_form();
                 if is_valid {
-                    return Ok(ProjectFormEvent::Save {
+                    return ProjectFormEvent::Save {
                         name: self.get_name_value(),
                         description: self.get_description_value(),
-                    });
+                    };
                 }
             }
             _ => {
@@ -68,19 +67,17 @@ impl<'a> ProjectForm<'a> {
             }
         }
 
-        Ok(ProjectFormEvent::Consumed)
+        ProjectFormEvent::Consumed
     }
 
-    fn validate_form(&mut self) -> Result<bool, AppError> {
+    fn validate_form(&mut self) -> bool {
         let mut is_valid = true;
 
         let Some(block) = self.name_text_area.block().cloned() else {
-            return Err(AppError::InvalidState {
-                message: "No block on name text area",
-            });
+            return false;
         };
 
-        if self.get_name_value().len() == 0 {
+        if self.get_name_value().is_empty() {
             is_valid = false;
             self.name_text_area
                 .set_block(block.border_style(Color::Red));
@@ -89,15 +86,14 @@ impl<'a> ProjectForm<'a> {
                 .set_block(block.border_style(Color::DarkGray));
         }
 
-        Ok(is_valid)
+        is_valid
     }
 
     fn get_name_value(&self) -> String {
         self.name_text_area
             .lines()
             .first()
-            .map(String::as_str)
-            .unwrap_or("")
+            .map_or("", String::as_str)
             .trim()
             .to_string()
     }
@@ -107,12 +103,11 @@ impl<'a> ProjectForm<'a> {
             .description_text_area
             .lines()
             .first()
-            .map(String::as_str)
-            .unwrap_or("")
+            .map_or("", String::as_str)
             .trim()
             .to_string();
 
-        if description.len() == 0 {
+        if description.is_empty() {
             None
         } else {
             Some(description)
@@ -135,12 +130,14 @@ impl<'a> ProjectForm<'a> {
     }
 }
 
-impl<'a> Widget for &ProjectForm<'a> {
+impl Widget for &ProjectForm<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let title = " Esc ".blue().bold().into_right_aligned_line();
+        let shadow = Shadow::overlay().black().on_yellow();
 
         let block = Block::bordered()
             .title(title)
+            .shadow(shadow)
             .bg(Color::LightYellow)
             .fg(Color::DarkGray);
 
@@ -187,7 +184,7 @@ mod tests {
         fn esc_returns_cancel() {
             let mut form = ProjectForm::new(None, None);
 
-            let event = form.handle_key_event(key(KeyCode::Esc)).unwrap();
+            let event = form.handle_key_event(key(KeyCode::Esc));
 
             match event {
                 ProjectFormEvent::Cancel => {}
@@ -199,7 +196,7 @@ mod tests {
         fn tab_toggles_focus_and_consumes() {
             let mut form = ProjectForm::new(None, None);
 
-            let event = form.handle_key_event(key(KeyCode::Tab)).unwrap();
+            let event = form.handle_key_event(key(KeyCode::Tab));
 
             match event {
                 ProjectFormEvent::Consumed => {}
@@ -213,7 +210,7 @@ mod tests {
         fn enter_with_valid_name_returns_save() {
             let mut form = ProjectForm::new(Some("Project".into()), Some("desc".into()));
 
-            let event = form.handle_key_event(key(KeyCode::Enter)).unwrap();
+            let event = form.handle_key_event(key(KeyCode::Enter));
 
             match event {
                 ProjectFormEvent::Save { name, description } => {
@@ -228,7 +225,7 @@ mod tests {
         fn enter_with_invalid_name_returns_consumed_and_marks_invalid() {
             let mut form = ProjectForm::new(None, None);
 
-            let event = form.handle_key_event(key(KeyCode::Enter)).unwrap();
+            let event = form.handle_key_event(key(KeyCode::Enter));
 
             match event {
                 ProjectFormEvent::Consumed => {}
@@ -240,7 +237,7 @@ mod tests {
         fn typing_goes_to_name_field_when_focused() {
             let mut form = ProjectForm::new(None, None);
 
-            form.handle_key_event(key(KeyCode::Char('a'))).unwrap();
+            form.handle_key_event(key(KeyCode::Char('a')));
 
             assert_eq!(form.get_name_value(), "a");
         }
@@ -251,7 +248,7 @@ mod tests {
 
             form.toggle_focused_field();
 
-            form.handle_key_event(key(KeyCode::Char('b'))).unwrap();
+            form.handle_key_event(key(KeyCode::Char('b')));
 
             assert_eq!(form.get_description_value(), Some("b".to_string()));
         }
@@ -326,7 +323,7 @@ mod tests {
         fn invalid_when_name_empty() {
             let mut form = ProjectForm::new(None, None);
 
-            let result = form.validate_form().unwrap();
+            let result = form.validate_form();
 
             assert!(!result);
         }
@@ -335,7 +332,7 @@ mod tests {
         fn valid_when_name_present() {
             let mut form = ProjectForm::new(Some("Project".into()), None);
 
-            let result = form.validate_form().unwrap();
+            let result = form.validate_form();
 
             assert!(result);
         }
@@ -343,17 +340,10 @@ mod tests {
 
     mod render {
         use super::*;
-
-        fn flatten(buf: &Buffer) -> String {
-            buf.content()
-                .iter()
-                .map(|c| c.symbol())
-                .collect::<Vec<_>>()
-                .join("")
-        }
+        use crate::tui::render_test_util::RenderTestUtil;
 
         #[test]
-        fn render_snapshot() {
+        fn form_with_values() {
             let form = ProjectForm::new(
                 Some("My Project".to_string()),
                 Some("My Description".to_string()),
@@ -361,33 +351,45 @@ mod tests {
 
             let mut buf = Buffer::empty(Rect::new(0, 0, 61, 10));
 
-            (&form).render(buf.area, &mut buf);
+            form.render(buf.area, &mut buf);
 
-            let flat = flatten(&buf);
+            let expected = vec![
+                " ┌───────────────────────────────────────────────────── Esc ┐",
+                " │┌Name────────────────────────────────────────────────────┐│",
+                " ││My Project                                              ││",
+                " │└────────────────────────────────────────────────────────┘│",
+                " │┌Description─────────────────────────────────────────────┐│",
+                " ││My Description                                          ││",
+                " ││                                                        ││",
+                " ││                                                        ││",
+                " │└────────────────────────────────────────────────────────┘│",
+                " └──────────────────────────────────────────────────────────┘",
+            ];
 
-            assert!(flat.contains("Esc"));
-            assert!(flat.contains("Name"));
-            assert!(flat.contains("Description"));
-            assert!(flat.contains("My Project"));
-            assert!(flat.contains("My Description"));
+            RenderTestUtil::assert_eq(expected, &buf);
         }
 
         #[test]
-        fn render_empty_form_snapshot() {
+        fn empty_form() {
             let form = ProjectForm::new(None, None);
-
             let mut buf = Buffer::empty(Rect::new(0, 0, 61, 10));
 
-            (&form).render(buf.area, &mut buf);
+            form.render(buf.area, &mut buf);
 
-            let flat = flatten(&buf);
+            let expected = vec![
+                " ┌───────────────────────────────────────────────────── Esc ┐",
+                " │┌Name────────────────────────────────────────────────────┐│",
+                " ││                                                        ││",
+                " │└────────────────────────────────────────────────────────┘│",
+                " │┌Description─────────────────────────────────────────────┐│",
+                " ││                                                        ││",
+                " ││                                                        ││",
+                " ││                                                        ││",
+                " │└────────────────────────────────────────────────────────┘│",
+                " └──────────────────────────────────────────────────────────┘",
+            ];
 
-            assert!(flat.contains("Esc"));
-            assert!(flat.contains("Name"));
-            assert!(flat.contains("Description"));
-
-            // empty values should still render structure
-            assert!(flat.len() > 0);
+            RenderTestUtil::assert_eq(expected, &buf);
         }
     }
 }

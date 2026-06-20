@@ -4,7 +4,7 @@ use clap::Subcommand;
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
     Where,
-    /// Set time format (Seconds | HoursMinutes | HoursMinutesSeconds | DecimalHours)
+    /// Set time format (`Seconds` | `HoursMinutes` | `HoursMinutesSeconds` | `DecimalHours`)
     TimeFormat {
         value: Option<TimeFormat>,
     },

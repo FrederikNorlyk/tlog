@@ -17,6 +17,7 @@ impl Format {
         match time_format {
             TimeFormat::HoursMinutesSeconds | TimeFormat::Seconds => seconds,
             TimeFormat::HoursMinutes => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
                 let mut minutes = (seconds as f64 / 60.0).round() as i64;
 
                 // if non-zero but rounded below 1 minute, round up to 1 minute
@@ -27,6 +28,7 @@ impl Format {
                 minutes * 60
             }
             TimeFormat::DecimalHours => {
+                #[allow(clippy::cast_precision_loss)]
                 let hours = seconds as f64 / 3600.0;
 
                 // round to nearest quarter hour
@@ -37,7 +39,10 @@ impl Format {
                     rounded_hours = 0.25;
                 }
 
-                (rounded_hours * 3600.0) as i64
+                #[allow(clippy::cast_possible_truncation)]
+                let result = (rounded_hours * 3600.0) as i64;
+
+                result
             }
         }
     }
@@ -56,6 +61,7 @@ impl Format {
                 format!("{h:02}:{m:02}")
             }
             TimeFormat::DecimalHours => {
+                #[allow(clippy::cast_precision_loss)]
                 let hours = seconds as f64 / 3600.0;
                 format!("{hours:05.2}")
             }
@@ -63,6 +69,10 @@ impl Format {
         }
     }
 
+    /// Takes a user's input in the form of a string and attempts to convert it to a number of seconds.
+    ///
+    /// # Errors
+    /// Returns an error if the supplied input is invalid
     pub fn string_to_seconds(text: &str, time_format: TimeFormat) -> Result<i64, String> {
         if text.is_empty() {
             return Err("Value cannot be empty".to_string());
@@ -125,13 +135,17 @@ impl Format {
 
                     let (h, m, _) = Self::parse_hms(&parts)?;
 
+                    #[allow(clippy::cast_precision_loss)]
                     let m = m as f64;
 
                     if m >= 60.0 {
                         return Err("Minutes must be < 60".to_string());
                     }
 
-                    h as f64 + (m / 60.0)
+                    #[allow(clippy::cast_precision_loss)]
+                    let seconds = h as f64 + (m / 60.0);
+
+                    seconds
                 } else {
                     text.parse::<f64>()
                         .map_err(|_| "Expected decimal hours (e.g. 1.5) or HH:MM".to_string())?
@@ -141,14 +155,17 @@ impl Format {
                     return Err("Value must be >= 0".to_string());
                 }
 
-                Ok((value * 3600.0).round() as i64)
+                #[allow(clippy::cast_possible_truncation)]
+                let seconds = (value * 3600.0).round() as i64;
+
+                Ok(seconds)
             }
         }
     }
 
     fn parse_hms(parts: &[&str]) -> Result<(i64, i64, i64), String> {
         let h: i64 = parts
-            .get(0)
+            .first()
             .unwrap_or(&"0")
             .parse()
             .map_err(|_| "Invalid hours".to_string())?;

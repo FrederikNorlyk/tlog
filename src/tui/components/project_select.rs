@@ -4,9 +4,11 @@ use crate::model::project::Project;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::Text;
-use ratatui::widgets::{Block, List, ListDirection, ListItem, ListState, StatefulWidget, Widget};
+use ratatui::widgets::{
+    Block, Clear, List, ListDirection, ListItem, ListState, Shadow, StatefulWidget, Widget,
+};
 use ratatui_textarea::TextArea;
 use rusqlite::Connection;
 use time::Date;
@@ -20,6 +22,10 @@ pub struct ProjectSelect<'a> {
 }
 
 impl<'a> ProjectSelect<'a> {
+    /// Create a new Project select.
+    ///
+    /// # Errors
+    /// Returns and error if querying projects fails.
     pub fn new(connection: &'a Connection, date: Date) -> rusqlite::Result<Self> {
         let project_repository = ProjectRepository::new(connection);
 
@@ -30,7 +36,7 @@ impl<'a> ProjectSelect<'a> {
             connection,
             state,
             projects: project_repository.search_by_name("", date)?,
-            text_area: TextArea::new(vec!["".to_string()]),
+            text_area: TextArea::new(vec![String::new()]),
             date,
         })
     }
@@ -72,8 +78,7 @@ impl<'a> ProjectSelect<'a> {
                     self.text_area
                         .lines()
                         .first()
-                        .map(String::as_str)
-                        .unwrap_or("")
+                        .map_or("", String::as_str)
                         .to_string()
                 };
 
@@ -85,22 +90,33 @@ impl<'a> ProjectSelect<'a> {
     }
 
     fn get_selected_project_id(&mut self) -> Option<i32> {
-        let Some(selected_index) = self.state.selected() else {
-            return None;
-        };
+        let selected_index = self.state.selected()?;
 
         if self.projects.len() <= selected_index {
             return None;
         }
 
-        let project = &self.projects[selected_index];
+        let project = &self.projects.get(selected_index)?;
 
         Some(project.id)
     }
 
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer, block: Block) {
-        let inner = block.inner(area);
-        block.render(area, buf);
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        let title = " Esc ".blue().bold().into_right_aligned_line();
+        let shadow = Shadow::overlay().black().on_yellow();
+
+        let block = Block::bordered()
+            .title(title)
+            .shadow(shadow)
+            .bg(Color::LightYellow)
+            .fg(Color::DarkGray);
+
+        let popup_area = area.centered(Constraint::Percentage(60), Constraint::Percentage(60));
+        let inner = block.inner(popup_area);
+
+        // clear + render block on same area
+        Clear.render(popup_area, buf);
+        block.render(popup_area, buf);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -144,7 +160,7 @@ pub enum ProjectSelectEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::test_utils::DBTestContext;
+    use crate::db::db_test_context::DBTestContext;
     use time::macros::date;
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -153,14 +169,6 @@ mod tests {
 
     fn ctrl_key(code: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL)
-    }
-
-    fn flatten(buf: &Buffer) -> String {
-        buf.content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect::<Vec<_>>()
-            .join("")
     }
 
     fn initialze_context() -> DBTestContext {
@@ -187,7 +195,7 @@ mod tests {
         fn creates_with_empty_query() {
             let context = initialze_context();
 
-            let select = ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01));
+            let select = ProjectSelect::new(context.connection(), date!(2024 - 01 - 01));
 
             assert!(select.is_ok());
         }
@@ -201,21 +209,23 @@ mod tests {
             let context = initialze_context();
 
             let mut select =
-                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
-
-            let previous_index = select.state.selected().unwrap() as i32;
+                ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
 
             select.handle_key_event(ctrl_key('k')).unwrap();
-            assert_eq!(select.state.selected().unwrap() as i32, previous_index + 1);
+            let selected_id = select.get_selected_project_id().unwrap();
+            assert_eq!(selected_id, 3);
 
             select.handle_key_event(ctrl_key('j')).unwrap();
-            assert_eq!(select.state.selected().unwrap() as i32, previous_index);
+            let selected_id = select.get_selected_project_id().unwrap();
+            assert_eq!(selected_id, 2);
 
             select.handle_key_event(key(KeyCode::Up)).unwrap();
-            assert_eq!(select.state.selected().unwrap() as i32, previous_index + 1);
+            let selected_id = select.get_selected_project_id().unwrap();
+            assert_eq!(selected_id, 3);
 
             select.handle_key_event(key(KeyCode::Down)).unwrap();
-            assert_eq!(select.state.selected().unwrap() as i32, previous_index);
+            let selected_id = select.get_selected_project_id().unwrap();
+            assert_eq!(selected_id, 2);
         }
 
         #[test]
@@ -223,7 +233,7 @@ mod tests {
             let context = initialze_context();
 
             let mut select =
-                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
+                ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
 
             let result = select.handle_key_event(key(KeyCode::Enter)).unwrap();
 
@@ -238,7 +248,7 @@ mod tests {
             let context = initialze_context();
 
             let mut select =
-                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
+                ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
 
             select.handle_key_event(key(KeyCode::Char('x'))).unwrap();
 
@@ -255,7 +265,7 @@ mod tests {
             let context = initialze_context();
 
             let mut select =
-                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
+                ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
 
             select.handle_key_event(key(KeyCode::Up)).unwrap();
 
@@ -269,7 +279,7 @@ mod tests {
             let context = initialze_context();
 
             let mut select =
-                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
+                ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
 
             select.state.select(None);
 
@@ -281,26 +291,44 @@ mod tests {
 
     mod render {
         use super::*;
+        use crate::tui::render_test_util::RenderTestUtil;
 
         #[test]
         fn renders_list_and_input() {
             let context = initialze_context();
 
             let mut select =
-                ProjectSelect::new(&context.connection(), date!(2024 - 01 - 01)).unwrap();
+                ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
 
-            let block = Block::default();
-
-            let area = Rect::new(0, 0, 60, 10);
+            let area = Rect::new(0, 0, 70, 20);
             let mut buf = Buffer::empty(area);
 
-            select.render(area, &mut buf, block);
+            select.render(area, &mut buf);
 
-            let flat = flatten(&buf);
+            let expected = vec![
+                "                                                                      ",
+                "                                                                      ",
+                "                                                                      ",
+                "                                                                      ",
+                "              ┌─────────────────────────────────── Esc ┐              ",
+                "              │                                        │              ",
+                "              │                                        │              ",
+                "              │                                        │              ",
+                "              │                                        │              ",
+                "              │                                        │              ",
+                "              │                                        │              ",
+                "              │Project A                               │              ",
+                "              │One more - With some other text         │              ",
+                "              │Another project - With a description    │              ",
+                "              │                                        │              ",
+                "              └────────────────────────────────────────┘              ",
+                "                                                                      ",
+                "                                                                      ",
+                "                                                                      ",
+                "                                                                      ",
+            ];
 
-            assert!(flat.contains("Project A"));
-            assert!(flat.contains("One more - With some other text"));
-            assert!(flat.contains("Another project - With a description"));
+            RenderTestUtil::assert_eq(expected, &buf);
         }
     }
 }

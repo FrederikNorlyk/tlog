@@ -142,7 +142,7 @@ impl<'a> ProjectRepository<'a> {
 
         let mut statement = self.connection.prepare(sql)?;
 
-        let pattern = format!("%{}%", name);
+        let pattern = format!("%{name}%");
 
         let rows = statement.query_map(
             named_params! {
@@ -205,7 +205,7 @@ impl<'a> Repository<'a> for ProjectRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::test_utils::DBTestContext;
+    use crate::db::db_test_context::DBTestContext;
 
     #[test]
     fn test_insert() -> rusqlite::Result<()> {

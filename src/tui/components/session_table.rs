@@ -13,7 +13,6 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Alignment, Constraint};
 use ratatui::style::{Color, Style};
 use ratatui::text::Text;
-use ratatui::widgets::{Clear, Shadow};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -132,7 +131,12 @@ impl<'a> SessionTable<'a> {
             " [2] Today".to_string()
         } else {
             let format = format_description!("[weekday repr:long], [day] [month repr:long] [year]");
-            format!(" [2] {}", self.date.format(&format).unwrap())
+            format!(
+                " [2] {}",
+                self.date
+                    .format(&format)
+                    .unwrap_or_else(|_| self.date.to_string())
+            )
         };
 
         let mut table_block = Block::bordered().title(title).border_set(border::THICK);
@@ -161,21 +165,7 @@ impl<'a> SessionTable<'a> {
         StatefulWidget::render(table, area, buf, &mut self.state);
 
         if let Some(project_select) = &mut self.project_select {
-            let shadow = Shadow::overlay().black().on_yellow();
-            let popup_title = " Esc ".blue().bold().into_right_aligned_line();
-
-            let popup_block = Block::bordered()
-                .title(popup_title)
-                .shadow(shadow)
-                .bg(Color::LightYellow)
-                .fg(Color::DarkGray);
-
-            let centered_area =
-                area.centered(Constraint::Percentage(60), Constraint::Percentage(60));
-
-            // clears out any background in the area before rendering the popup
-            Widget::render(Clear, centered_area, buf);
-            project_select.render(centered_area, buf, popup_block);
+            project_select.render(area, buf);
         }
 
         if self.is_showing_reset_alert_dialog {
@@ -209,11 +199,11 @@ impl<'a> SessionTable<'a> {
                     self.project_select = None;
                 }
                 ProjectSelectEvent::Ignore => {}
-            };
+            }
 
             return Ok(KeyEventResult::Consumed);
         } else if let Some(dialog) = &mut self.manual_session_dialog {
-            match dialog.handle_key_event(key_event)? {
+            match dialog.handle_key_event(key_event) {
                 ManualSessionEvent::Save { total_seconds } => {
                     self.set_manual_session(total_seconds)?;
                     self.manual_session_dialog = None;
@@ -222,7 +212,7 @@ impl<'a> SessionTable<'a> {
                     self.manual_session_dialog = None;
                 }
                 ManualSessionEvent::Consumed => {}
-            };
+            }
 
             return Ok(KeyEventResult::Consumed);
         } else if self.is_showing_reset_alert_dialog {
@@ -273,10 +263,10 @@ impl<'a> SessionTable<'a> {
             KeyCode::Char('D') if has_selected_session => self.reset_session()?,
             KeyCode::Char(' ') if has_selected_session => self.toggle_session()?,
             KeyCode::Char('s') => {
-                self.project_select = Some(ProjectSelect::new(self.connection, self.date)?)
+                self.project_select = Some(ProjectSelect::new(self.connection, self.date)?);
             }
             KeyCode::Char('S') if has_selected_session => {
-                self.manual_session_dialog = Some(ManualSessionDialog::new(self.time_format))
+                self.manual_session_dialog = Some(ManualSessionDialog::new(self.time_format));
             }
             KeyCode::Char('c') if has_selected_session => {
                 return Ok(KeyEventResult::ShowKeybindOverlay {
@@ -351,9 +341,9 @@ impl<'a> SessionTable<'a> {
         let text = match copy_content {
             CopyContent::All => {
                 let mut output = Vec::new();
-                output.push(Self::escape_semicolon(session.project.name.clone()));
+                output.push(Self::escape_semicolon(&session.project.name));
                 if let Some(description) = &session.project.description {
-                    output.push(Self::escape_semicolon(description.clone()));
+                    output.push(Self::escape_semicolon(description));
                 }
 
                 output.push(Format::seconds_to_duration(
@@ -363,22 +353,22 @@ impl<'a> SessionTable<'a> {
 
                 output.join(";")
             }
-            CopyContent::Name => Self::escape_semicolon(session.project.name.clone()),
+            CopyContent::Name => Self::escape_semicolon(&session.project.name),
             CopyContent::Description => {
-                if let Some(description) = session.project.description.clone() {
+                if let Some(description) = &session.project.description {
                     Self::escape_semicolon(description)
                 } else {
-                    "".to_string()
+                    String::new()
                 }
             }
             CopyContent::Time => {
                 Format::seconds_to_duration(session.total_seconds, self.time_format)
             }
             CopyContent::Project => {
-                let mut project = Self::escape_semicolon(session.project.name.clone());
+                let mut project = Self::escape_semicolon(&session.project.name);
                 if let Some(description) = &session.project.description {
                     project.push_str(" - ");
-                    project.push_str(Self::escape_semicolon(description.clone()).as_str());
+                    project.push_str(Self::escape_semicolon(description).as_str());
                 }
 
                 project
@@ -391,14 +381,12 @@ impl<'a> SessionTable<'a> {
         Ok(())
     }
 
-    fn escape_semicolon(s: String) -> String {
+    fn escape_semicolon(s: &str) -> String {
         s.replace(';', "")
     }
 
     fn get_selected_session(&self) -> Option<&Session> {
-        let Some(selected_index) = self.state.selected() else {
-            return None;
-        };
+        let selected_index = self.state.selected()?;
 
         self.sessions.get(selected_index)
     }
@@ -419,6 +407,7 @@ impl<'a> SessionTable<'a> {
     }
 }
 
+#[derive(Copy, Clone)]
 enum CopyContent {
     All,
     Name,
@@ -430,10 +419,10 @@ enum CopyContent {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::db::db_test_context::DBTestContext;
     use crate::db::event_repository::EventRepository;
     use crate::db::manual_session_repository::ManualSessionRepository;
     use crate::db::project_repository::ProjectRepository;
-    use crate::db::test_utils::DBTestContext;
     use crate::model::event::EventType;
     use crossterm::event::KeyModifiers;
     use time::{Month, PrimitiveDateTime, Time};
@@ -492,17 +481,7 @@ mod test {
 
     mod render {
         use super::*;
-
-        fn flatten(buf: &Buffer) -> String {
-            let area = buf.area();
-            let width = area.width as usize;
-
-            buf.content()
-                .chunks(width)
-                .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
+        use crate::tui::render_test_util::RenderTestUtil;
 
         #[test]
         fn table_of_sessions() {
@@ -521,16 +500,16 @@ mod test {
 
             table.render(area, &mut buf, true);
 
-            let expected = Buffer::with_lines(vec![
+            let expected = vec![
                 "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                                                                     00:15┃",
                 "┃Project A                                                                                              01:31┃",
                 "┃                                                                                                            ┃",
                 "┃Total                                                                                                  01:46┃",
                 "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
-            ]);
+            ];
 
-            assert_eq!(flatten(&buf), flatten(&expected));
+            RenderTestUtil::assert_eq(expected, &buf);
         }
 
         #[test]
@@ -550,16 +529,16 @@ mod test {
 
             table.render(area, &mut buf, true);
 
-            let expected = Buffer::with_lines(vec![
+            let expected = vec![
                 "┏ [2] Today━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃                                                                                                            ┃",
                 "┃                                                                                                            ┃",
                 "┃                                                                                                            ┃",
                 "┃Total                                                                                                  00:00┃",
                 "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
-            ]);
+            ];
 
-            assert_eq!(flatten(&buf), flatten(&expected));
+            RenderTestUtil::assert_eq(expected, &buf);
         }
 
         #[test]
@@ -581,7 +560,7 @@ mod test {
 
             table.render(area, &mut buf, true);
 
-            let expected = Buffer::with_lines(vec![
+            let expected = vec![
                 "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                                                                     00:15┃",
                 "┃Project A            ┌─────────────────────────────────────────────────────────── Esc ┐                01:31┃",
@@ -592,9 +571,9 @@ mod test {
                 "┃                     └────────────────────────────────────────────────────────────────┘                     ┃",
                 "┃Total                                                                                                  01:46┃",
                 "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
-            ]);
+            ];
 
-            assert_eq!(flatten(&buf), flatten(&expected));
+            RenderTestUtil::assert_eq(expected, &buf);
         }
 
         #[test]
@@ -616,7 +595,7 @@ mod test {
 
             table.render(area, &mut buf, true);
 
-            let expected = Buffer::with_lines(vec![
+            let expected = vec![
                 "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                                                                     00:15┃",
                 "┃Project A               ┌───────────────────────────────────────────────────── Esc ┐                   01:31┃",
@@ -627,9 +606,9 @@ mod test {
                 "┃                        └────────────────y to delete, n to cancel ─────────────────┘                        ┃",
                 "┃Total                                                                                                  01:46┃",
                 "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
-            ]);
+            ];
 
-            assert_eq!(flatten(&buf), flatten(&expected));
+            RenderTestUtil::assert_eq(expected, &buf);
         }
 
         #[test]
@@ -651,7 +630,7 @@ mod test {
 
             table.render(area, &mut buf, true);
 
-            let expected = Buffer::with_lines(vec![
+            let expected = vec![
                 "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                                                                     00:15┃",
                 "┃Project A                                                                                              01:31┃",
@@ -663,9 +642,9 @@ mod test {
                 "┃                                                                                                            ┃",
                 "┃Total                                                                                                  01:46┃",
                 "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
-            ]);
+            ];
 
-            assert_eq!(flatten(&buf), flatten(&expected));
+            RenderTestUtil::assert_eq(expected, &buf);
         }
     }
 

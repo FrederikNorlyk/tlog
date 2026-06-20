@@ -262,7 +262,7 @@ mod tests {
 
     mod handle_project_command {
         use super::*;
-        use crate::db::test_utils::DBTestContext;
+        use crate::db::db_test_context::DBTestContext;
 
         mod add {
             use super::*;

@@ -22,6 +22,10 @@ pub struct ProjectTable<'a> {
 }
 
 impl<'a> ProjectTable<'a> {
+    /// Returns a new Project table.
+    ///
+    /// # Errors
+    /// Returns an error if querying project fails.
     pub fn new(connection: &'a Connection) -> Result<Self, AppError> {
         let project_repository = ProjectRepository::new(connection);
 
@@ -110,20 +114,20 @@ impl<'a> ProjectTable<'a> {
                     self.is_showing_deletion_alert_dialog = false;
                 }
                 AlertDialogEvent::Ignore => {}
-            };
+            }
 
             return Ok(KeyEventResult::Consumed);
         } else if let Some(form) = &mut self.project_form {
-            match form.handle_key_event(key_event)? {
+            match form.handle_key_event(key_event) {
                 ProjectFormEvent::Save { name, description } => {
-                    self.insert_project(name, description)?;
+                    self.insert_project(name.as_str(), description.as_deref())?;
                     self.project_form = None;
                 }
                 ProjectFormEvent::Cancel => {
                     self.project_form = None;
                 }
                 ProjectFormEvent::Consumed => {}
-            };
+            }
 
             return Ok(KeyEventResult::Consumed);
         }
@@ -139,7 +143,7 @@ impl<'a> ProjectTable<'a> {
             KeyCode::Char('G') | KeyCode::End => self.state.select_last(),
             KeyCode::Char('a') => self.project_form = Some(ProjectForm::new(None, None)),
             KeyCode::Char('d') if has_selected_project => {
-                self.is_showing_deletion_alert_dialog = true
+                self.is_showing_deletion_alert_dialog = true;
             }
             KeyCode::Char('D') if has_selected_project => self.delete_project()?,
             _ => did_match = false,
@@ -166,13 +170,9 @@ impl<'a> ProjectTable<'a> {
         Ok(())
     }
 
-    fn insert_project(
-        &mut self,
-        name: String,
-        description: Option<String>,
-    ) -> Result<(), AppError> {
+    fn insert_project(&mut self, name: &str, description: Option<&str>) -> Result<(), AppError> {
         let project_repository = ProjectRepository::new(self.connection);
-        project_repository.insert(name.as_str(), description.as_deref())?;
+        project_repository.insert(name, description)?;
         self.refresh_projects()?;
 
         Ok(())
@@ -192,9 +192,7 @@ impl<'a> ProjectTable<'a> {
     }
 
     fn get_selected_project(&self) -> Option<&Project> {
-        let Some(selected_index) = self.state.selected() else {
-            return None;
-        };
+        let selected_index = self.state.selected()?;
 
         self.projects.get(selected_index)
     }
@@ -203,7 +201,7 @@ impl<'a> ProjectTable<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::test_utils::DBTestContext;
+    use crate::db::db_test_context::DBTestContext;
     use crossterm::event::KeyModifiers;
 
     fn initialze_context() -> DBTestContext {
@@ -229,49 +227,39 @@ mod tests {
 
     mod render {
         use super::*;
-
-        fn flatten(buf: &Buffer) -> String {
-            let area = buf.area();
-            let width = area.width as usize;
-
-            buf.content()
-                .chunks(width)
-                .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
+        use crate::tui::render_test_util::RenderTestUtil;
 
         #[test]
         fn table_of_projects() {
             let context = initialze_context();
-            let mut table = ProjectTable::new(&context.connection()).unwrap();
+            let mut table = ProjectTable::new(context.connection()).unwrap();
             let area = Rect::new(0, 0, 60, 5);
             let mut buf = Buffer::empty(area);
 
             table.render(area, &mut buf, true);
 
-            let expected = Buffer::with_lines(vec![
+            let expected = vec![
                 "┏ [1] Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                        ┃",
                 "┃One more        With some other text                      ┃",
                 "┃Project A                                                 ┃",
                 "┗━━━━ Use g/G to go top/bottom, a to add a new project ━━━━┛",
-            ]);
+            ];
 
-            assert_eq!(flatten(&buf), flatten(&expected));
+            RenderTestUtil::assert_eq(expected, &buf);
         }
 
         #[test]
         fn project_form() {
             let context = initialze_context();
-            let mut table = ProjectTable::new(&context.connection()).unwrap();
+            let mut table = ProjectTable::new(context.connection()).unwrap();
             table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
             let area = Rect::new(0, 0, 70, 17);
             let mut buf = Buffer::empty(area);
 
             table.render(area, &mut buf, true);
 
-            let expected = Buffer::with_lines(vec![
+            let expected = vec![
                 "┏ [1] Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                                  ┃",
                 "┃One more        With some other text                                ┃",
@@ -289,15 +277,15 @@ mod tests {
                 "┃                                                                    ┃",
                 "┃                                                                    ┃",
                 "┗━━━━━━━━━ Use g/G to go top/bottom, a to add a new project ━━━━━━━━━┛",
-            ]);
+            ];
 
-            assert_eq!(flatten(&buf), flatten(&expected));
+            RenderTestUtil::assert_eq(expected, &buf);
         }
 
         #[test]
         fn delete_dialog() {
             let context = initialze_context();
-            let mut table = ProjectTable::new(&context.connection()).unwrap();
+            let mut table = ProjectTable::new(context.connection()).unwrap();
             table.handle_key_event(key(KeyCode::Down)).unwrap();
             table.handle_key_event(key(KeyCode::Char('d'))).unwrap();
             let area = Rect::new(0, 0, 70, 13);
@@ -305,7 +293,7 @@ mod tests {
 
             table.render(area, &mut buf, true);
 
-            let expected = Buffer::with_lines(vec![
+            let expected = vec![
                 "┏ [1] Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                                  ┃",
                 "┃One more        With some other text                                ┃",
@@ -319,9 +307,9 @@ mod tests {
                 "┃                                                                    ┃",
                 "┃                                                                    ┃",
                 "┗━━━━━━━━━ Use g/G to go top/bottom, a to add a new project ━━━━━━━━━┛",
-            ]);
+            ];
 
-            assert_eq!(flatten(&buf), flatten(&expected));
+            RenderTestUtil::assert_eq(expected, &buf);
         }
     }
 
@@ -331,39 +319,39 @@ mod tests {
         #[test]
         fn is_showing_delete_alert_dialog() {
             let context = initialze_context();
-            let mut table = ProjectTable::new(&context.connection()).unwrap();
+            let mut table = ProjectTable::new(context.connection()).unwrap();
 
             // Select first row and press 'd' to show delete dialog
-            assert_eq!(table.is_showing_deletion_alert_dialog, false);
+            assert!(!table.is_showing_deletion_alert_dialog);
             table.handle_key_event(key(KeyCode::Down)).unwrap();
             table.handle_key_event(key(KeyCode::Char('d'))).unwrap();
-            assert_eq!(table.is_showing_deletion_alert_dialog, true);
+            assert!(table.is_showing_deletion_alert_dialog);
 
             // Verify keys unused by the dialog doesn't close it
             let event = table.handle_key_event(key(KeyCode::Char('x'))).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
-            assert_eq!(table.is_showing_deletion_alert_dialog, true);
+            assert!(table.is_showing_deletion_alert_dialog);
 
             // Verify that the dialog can be closed, and that it does not trigger deletion
             let event = table.handle_key_event(key(KeyCode::Char('n'))).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
-            assert_eq!(table.is_showing_deletion_alert_dialog, false);
+            assert!(!table.is_showing_deletion_alert_dialog);
             assert_eq!(table.projects.len(), 3);
 
             // Press 'd' to show delete dialog
             table.handle_key_event(key(KeyCode::Char('d'))).unwrap();
-            assert_eq!(table.is_showing_deletion_alert_dialog, true);
+            assert!(table.is_showing_deletion_alert_dialog);
 
             // Verify that confirming deletion deletes a project
             table.handle_key_event(key(KeyCode::Char('y'))).unwrap();
-            assert_eq!(table.is_showing_deletion_alert_dialog, false);
+            assert!(!table.is_showing_deletion_alert_dialog);
             assert_eq!(table.projects.len(), 2);
         }
 
         #[test]
         fn is_showing_project_form() {
             let context = initialze_context();
-            let mut table = ProjectTable::new(&context.connection()).unwrap();
+            let mut table = ProjectTable::new(context.connection()).unwrap();
 
             // Press 'a' to show project form
             assert!(table.project_form.is_none());
@@ -405,7 +393,7 @@ mod tests {
         #[test]
         fn navigation() {
             let context = initialze_context();
-            let mut table = ProjectTable::new(&context.connection()).unwrap();
+            let mut table = ProjectTable::new(context.connection()).unwrap();
 
             assert!(table.get_selected_project().is_none());
             table.handle_key_event(key(KeyCode::Char('j'))).unwrap();
@@ -444,7 +432,7 @@ mod tests {
         #[test]
         fn force_delete() {
             let context = initialze_context();
-            let mut table = ProjectTable::new(&context.connection()).unwrap();
+            let mut table = ProjectTable::new(context.connection()).unwrap();
 
             assert_eq!(table.projects.len(), 3);
 
@@ -462,7 +450,7 @@ mod tests {
         #[test]
         fn unused_key() {
             let context = initialze_context();
-            let mut table = ProjectTable::new(&context.connection()).unwrap();
+            let mut table = ProjectTable::new(context.connection()).unwrap();
 
             let event = table.handle_key_event(key(KeyCode::Char('w'))).unwrap();
             assert_eq!(event, KeyEventResult::Unused);

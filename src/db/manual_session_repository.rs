@@ -117,8 +117,8 @@ impl<'a> Repository<'a> for ManualSessionRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::db_test_context::DBTestContext;
     use crate::db::project_repository::ProjectRepository;
-    use crate::db::test_utils::DBTestContext;
     use time::Month;
 
     fn initialize_context() -> Result<DBTestContext> {

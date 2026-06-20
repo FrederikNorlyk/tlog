@@ -8,34 +8,47 @@ use thiserror::Error;
 pub struct Config;
 
 impl Config {
+    /// Get the app's configuration.
+    ///
+    /// # Errors
+    /// Returns an error if reading or writing to files failed.
     pub fn get() -> Result<ConfigMetadata, ConfigError> {
         let path = Config::get_or_create_file_path()?;
         let contents = fs::read_to_string(path)?;
         Ok(toml::from_str(&contents)?)
     }
 
+    /// Sets the app's time format
+    ///
+    /// # Errors
+    /// Returns an error if reading or writing to files failed.
     pub fn set_time_format(time_format: TimeFormat) -> Result<(), ConfigError> {
         let mut config = Config::get()?;
         config.time_format = time_format;
 
-        Self::write(config)?;
+        Self::write(&config)?;
 
         Ok(())
     }
 
+    /// Returns the path to the app's configuration file.
+    /// If the file doesn't exist, it attempts to create it.
+    ///
+    /// # Errors
+    /// Returns an error if reading or writing to files failed.
     pub fn get_or_create_file_path() -> Result<PathBuf, ConfigError> {
         let path = Self::file_path()?;
 
         if !path.exists() {
-            Self::write(ConfigMetadata::default())?;
+            Self::write(&ConfigMetadata::default())?;
         }
 
         Ok(path)
     }
 
-    fn write(config: ConfigMetadata) -> Result<(), ConfigError> {
+    fn write(config: &ConfigMetadata) -> Result<(), ConfigError> {
         let path = Self::file_path()?;
-        let toml_str = toml::to_string_pretty(&config)?;
+        let toml_str = toml::to_string_pretty(config)?;
 
         fs::write(&path, toml_str)?;
 
@@ -69,6 +82,7 @@ impl Default for ConfigMetadata {
 }
 
 impl ConfigMetadata {
+    #[must_use]
     pub fn time_format(&self) -> TimeFormat {
         self.time_format
     }

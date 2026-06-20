@@ -1,4 +1,3 @@
-use crate::core::app_error::AppError;
 use crate::core::format::Format;
 use crate::core::time_format::TimeFormat;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -6,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::prelude::{Color, Stylize, Widget};
 use ratatui::style::Style;
-use ratatui::widgets::{Block, Borders, Clear};
+use ratatui::widgets::{Block, Borders, Clear, Shadow};
 use ratatui_textarea::TextArea;
 
 pub struct ManualSessionDialog<'a> {
@@ -15,8 +14,9 @@ pub struct ManualSessionDialog<'a> {
 }
 
 impl<'a> ManualSessionDialog<'a> {
+    #[must_use]
     pub fn new(time_format: TimeFormat) -> Self {
-        let mut text_area = TextArea::new(vec!["".to_string()]);
+        let mut text_area = TextArea::new(vec![String::new()]);
         text_area.set_style(Style::default().fg(Color::DarkGray));
         text_area.set_block(Self::get_block(time_format));
 
@@ -42,20 +42,17 @@ impl<'a> ManualSessionDialog<'a> {
         }
     }
 
-    pub fn handle_key_event(
-        &mut self,
-        key_event: KeyEvent,
-    ) -> Result<ManualSessionEvent, AppError> {
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> ManualSessionEvent {
         match key_event.code {
-            KeyCode::Esc => return Ok(ManualSessionEvent::Cancel),
+            KeyCode::Esc => return ManualSessionEvent::Cancel,
             KeyCode::Enter => match self.get_value() {
                 Ok(value) => {
-                    return Ok(ManualSessionEvent::Save {
+                    return ManualSessionEvent::Save {
                         total_seconds: value,
-                    });
+                    };
                 }
                 Err(error) => {
-                    self.mark_form_invalid(error)?;
+                    self.mark_form_invalid(error);
                 }
             },
             _ => {
@@ -63,17 +60,15 @@ impl<'a> ManualSessionDialog<'a> {
             }
         }
 
-        Ok(ManualSessionEvent::Consumed)
+        ManualSessionEvent::Consumed
     }
 
-    fn mark_form_invalid(&mut self, message: String) -> Result<(), AppError> {
+    fn mark_form_invalid(&mut self, message: String) {
         let new_block = Self::get_block(self.time_format)
             .border_style(Color::Red)
             .title_bottom(message);
 
         self.text_area.set_block(new_block);
-
-        Ok(())
     }
 
     fn get_value(&self) -> Result<i64, String> {
@@ -81,8 +76,7 @@ impl<'a> ManualSessionDialog<'a> {
             .text_area
             .lines()
             .first()
-            .map(String::as_str)
-            .unwrap_or("")
+            .map_or("", String::as_str)
             .trim();
 
         let time_format = self.time_format;
@@ -91,12 +85,14 @@ impl<'a> ManualSessionDialog<'a> {
     }
 }
 
-impl<'a> Widget for &ManualSessionDialog<'a> {
+impl Widget for &ManualSessionDialog<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let title = " Esc ".blue().bold().into_right_aligned_line();
+        let shadow = Shadow::overlay().black().on_yellow();
 
         let block = Block::bordered()
             .title(title)
+            .shadow(shadow)
             .bg(Color::LightYellow)
             .fg(Color::DarkGray);
 
@@ -127,77 +123,48 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    // ----------------------------
-    // KEY HANDLING
-    // ----------------------------
+    mod handle_key_event {
+        use super::*;
 
-    #[test]
-    fn handle_escape_cancels() {
-        let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
+        #[test]
+        fn escape_cancels() {
+            let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
 
-        let res = dialog.handle_key_event(key(KeyCode::Esc)).unwrap();
-        assert!(matches!(res, ManualSessionEvent::Cancel));
-    }
-
-    #[test]
-    fn handle_enter_with_valid_value_saves_session() {
-        let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
-
-        for c in "120".chars() {
-            dialog.text_area.input(key(KeyCode::Char(c)));
+            let res = dialog.handle_key_event(key(KeyCode::Esc));
+            assert!(matches!(res, ManualSessionEvent::Cancel));
         }
 
-        let event = dialog.handle_key_event(key(KeyCode::Enter)).unwrap();
+        #[test]
+        fn enter_with_valid_value_saves_session() {
+            let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
 
-        assert!(matches!(
-            event,
-            ManualSessionEvent::Save { total_seconds: 120 }
-        ));
-    }
+            for c in "120".chars() {
+                dialog.text_area.input(key(KeyCode::Char(c)));
+            }
 
-    #[test]
-    fn handle_enter_with_invalid_value_renders_warning_message() {
-        let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
+            let event = dialog.handle_key_event(key(KeyCode::Enter));
 
-        for c in "abc".chars() {
-            dialog.text_area.input(key(KeyCode::Char(c)));
+            assert!(matches!(
+                event,
+                ManualSessionEvent::Save { total_seconds: 120 }
+            ));
         }
 
-        let event = dialog.handle_key_event(key(KeyCode::Enter)).unwrap();
+        #[test]
+        fn enter_empty_is_error_and_consumed() {
+            let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
 
-        assert!(matches!(event, ManualSessionEvent::Consumed));
+            let res = dialog.handle_key_event(key(KeyCode::Enter));
+            assert!(matches!(res, ManualSessionEvent::Consumed));
+        }
 
-        let mut buf = Buffer::empty(Rect::new(0, 0, 61, 5));
-        dialog.render(buf.area, &mut buf);
+        #[test]
+        fn char_input_consumed() {
+            let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
 
-        let rendered: String = buf
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<Vec<_>>()
-            .join("");
-
-        assert!(
-            rendered.contains("Expected whole seconds"),
-            "Rendered buffer did not contain validation error:\n{}",
-            rendered
-        );
-    }
-
-    #[test]
-    fn handle_enter_empty_is_error_and_consumed() {
-        let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
-
-        let res = dialog.handle_key_event(key(KeyCode::Enter)).unwrap();
-        assert!(matches!(res, ManualSessionEvent::Consumed));
-    }
-
-    #[test]
-    fn handle_char_input_consumed() {
-        let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
-
-        let res = dialog.handle_key_event(key(KeyCode::Char('1'))).unwrap();
-        assert!(matches!(res, ManualSessionEvent::Consumed));
+            let res = dialog.handle_key_event(key(KeyCode::Char('1')));
+            assert!(matches!(res, ManualSessionEvent::Consumed));
+        }
     }
 
     #[test]
@@ -222,52 +189,53 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // ----------------------------
-    // RENDER TEST (STRICT SNAPSHOT)
-    // ----------------------------
+    mod render {
+        use super::*;
+        use crate::tui::render_test_util::RenderTestUtil;
 
-    #[test]
-    fn render_snapshot() {
-        let dialog = ManualSessionDialog::new(TimeFormat::HoursMinutesSeconds);
+        #[test]
+        fn render_snapshot() {
+            let dialog = ManualSessionDialog::new(TimeFormat::HoursMinutesSeconds);
 
-        let mut buf = Buffer::empty(Rect::new(0, 0, 61, 5));
+            let mut buf = Buffer::empty(Rect::new(0, 0, 61, 5));
 
-        dialog.render(buf.area, &mut buf);
+            dialog.render(buf.area, &mut buf);
 
-        let flat: String = buf
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect::<Vec<_>>()
-            .join("");
+            let expected = vec![
+                " ┌───────────────────────────────────────────────────── Esc ┐",
+                " │┌Hours, minutes, and seconds [00:00:00]──────────────────┐│",
+                " ││                                                        ││",
+                " │└────────────────────────────────────────────────────────┘│",
+                " └──────────────────────────────────────────────────────────┘",
+            ];
 
-        assert!(flat.contains("Esc"));
-        assert!(flat.contains("Hours, minutes, and seconds"));
-    }
+            RenderTestUtil::assert_eq(expected, &buf);
+        }
 
-    // ----------------------------
-    // INVALID FORM MARKING
-    // ----------------------------
+        #[test]
+        fn mark_invalid_changes_footer() {
+            let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
 
-    #[test]
-    fn mark_invalid_changes_footer() {
-        let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
+            for c in "abc".chars() {
+                dialog.text_area.input(key(KeyCode::Char(c)));
+            }
 
-        dialog
-            .mark_form_invalid("Invalid input".to_string())
-            .unwrap();
+            let event = dialog.handle_key_event(key(KeyCode::Enter));
 
-        let mut buf = Buffer::empty(Rect::new(0, 0, 61, 5));
-        dialog.render(buf.area, &mut buf);
+            assert!(matches!(event, ManualSessionEvent::Consumed));
 
-        let flat: String = buf
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect::<Vec<_>>()
-            .join("");
+            let mut buf = Buffer::empty(Rect::new(0, 0, 61, 5));
+            dialog.render(buf.area, &mut buf);
 
-        // footer content must appear somewhere in rendered buffer
-        assert!(flat.contains("Invalid input"));
+            let expected = vec![
+                " ┌───────────────────────────────────────────────────── Esc ┐",
+                " │┌Seconds─────────────────────────────────────────────────┐│",
+                " ││abc                                                     ││",
+                " │└Expected whole seconds (e.g. 120)───────────────────────┘│",
+                " └──────────────────────────────────────────────────────────┘",
+            ];
+
+            RenderTestUtil::assert_eq(expected, &buf);
+        }
     }
 }

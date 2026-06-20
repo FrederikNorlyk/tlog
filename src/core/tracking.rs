@@ -237,9 +237,9 @@ pub enum TrackingError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::db_test_context::DBTestContext;
     use crate::db::event_repository::EventRepository;
     use crate::db::project_repository::ProjectRepository;
-    use crate::db::test_utils::DBTestContext;
     use crate::model::event::EventType::{Start, Stop};
     use std::error::Error;
     use time::{OffsetDateTime, PrimitiveDateTime, Time};
