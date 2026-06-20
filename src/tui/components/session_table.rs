@@ -427,7 +427,7 @@ mod test {
     use crossterm::event::KeyModifiers;
     use time::{Month, PrimitiveDateTime, Time};
 
-    fn initialze_context() -> DBTestContext {
+    fn initialize_context() -> DBTestContext {
         let context = DBTestContext::new().unwrap();
         let project_repository = ProjectRepository::new(context.connection());
 
@@ -485,7 +485,7 @@ mod test {
 
         #[test]
         fn table_of_sessions() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut table = SessionTable::new(
                 context.connection(),
@@ -514,7 +514,7 @@ mod test {
 
         #[test]
         fn today_in_title() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut table = SessionTable::new(
                 context.connection(),
@@ -543,7 +543,7 @@ mod test {
 
         #[test]
         fn project_select() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut table = SessionTable::new(
                 context.connection(),
@@ -578,7 +578,7 @@ mod test {
 
         #[test]
         fn reset_alert_dialog() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut table = SessionTable::new(
                 context.connection(),
@@ -613,7 +613,7 @@ mod test {
 
         #[test]
         fn manual_session_dialog() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut table = SessionTable::new(
                 context.connection(),
@@ -653,7 +653,7 @@ mod test {
 
         #[test]
         fn navigation() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut table = SessionTable::new(
                 context.connection(),
@@ -724,7 +724,7 @@ mod test {
 
         #[test]
         fn delete() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut table = SessionTable::new(
                 context.connection(),
@@ -771,7 +771,7 @@ mod test {
 
         #[test]
         fn manual_session() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut table = SessionTable::new(
                 context.connection(),
@@ -807,7 +807,7 @@ mod test {
 
         #[test]
         fn project_select() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut table = SessionTable::new(
                 context.connection(),
@@ -838,6 +838,62 @@ mod test {
             let event = table.handle_key_event(key(KeyCode::Enter)).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
             assert!(table.project_select.is_none());
+        }
+
+        #[test]
+        fn is_showing_copy_keybinds() {
+            let context = initialize_context();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                get_test_date(),
+                false,
+            )
+            .unwrap();
+
+            table.set_is_showing_copy_keybinds(true);
+
+            let event = table.handle_key_event(key(KeyCode::Esc)).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+
+            let event = table.handle_key_event(key(KeyCode::Char('x'))).unwrap();
+            assert_eq!(event, KeyEventResult::Unused);
+
+            assert_clipboard_event(&mut table, 'c', "Another project;With a description;00:15");
+            assert_clipboard_event(&mut table, 'n', "Another project");
+            assert_clipboard_event(&mut table, 'd', "With a description");
+            assert_clipboard_event(&mut table, 't', "00:15");
+            assert_clipboard_event(&mut table, 'p', "Another project - With a description");
+
+            table.set_is_showing_copy_keybinds(false);
+            table.handle_key_event(key(KeyCode::Char('f'))).unwrap();
+            table.set_is_showing_copy_keybinds(true);
+            assert_clipboard_event(&mut table, 't', "00.25");
+
+            table.set_is_showing_copy_keybinds(false);
+            table.handle_key_event(key(KeyCode::Char('f'))).unwrap();
+            table.set_is_showing_copy_keybinds(true);
+            assert_clipboard_event(&mut table, 't', "900");
+
+            table.set_is_showing_copy_keybinds(false);
+            table.handle_key_event(key(KeyCode::Char('f'))).unwrap();
+            table.set_is_showing_copy_keybinds(true);
+            assert_clipboard_event(&mut table, 't', "00:15:00");
+        }
+
+        fn assert_clipboard_event(
+            table: &mut SessionTable,
+            pressed_key: char,
+            expected_text: &str,
+        ) {
+            let event = table
+                .handle_key_event(key(KeyCode::Char(pressed_key)))
+                .unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+            let mut clipboard = Clipboard::new().unwrap();
+            let clipped_text = clipboard.get_text().unwrap();
+            assert_eq!(clipped_text, expected_text);
         }
     }
 }
