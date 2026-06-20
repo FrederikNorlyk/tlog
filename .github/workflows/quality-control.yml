@@ -24,4 +24,4 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Coverage
-        run: cargo llvm-cov --all-features --workspace --fail-under-lines 80
+        run: cargo llvm-cov --all-features --workspace --fail-under-lines 90
