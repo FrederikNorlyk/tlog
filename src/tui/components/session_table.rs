@@ -650,6 +650,7 @@ mod test {
 
     mod handle_key_event {
         use super::*;
+        use std::thread;
 
         #[test]
         fn navigation() {
@@ -767,6 +768,93 @@ mod test {
             assert_eq!(event, KeyEventResult::Consumed);
             assert!(!table.is_showing_reset_alert_dialog);
             assert!(table.sessions.is_empty());
+        }
+
+        #[test]
+        fn toggle_session() {
+            let context = initialize_context();
+            let today = OffsetDateTime::now_utc().date();
+            let manual_session_repository = ManualSessionRepository::new(context.connection());
+
+            manual_session_repository.upsert(2, today, 500).unwrap();
+            manual_session_repository.upsert(1, today, 500).unwrap();
+
+            let mut table =
+                SessionTable::new(context.connection(), TimeFormat::HoursMinutes, today, false)
+                    .unwrap();
+
+            // Assert that all sessions are stopped
+            assert_eq!(table.sessions.len(), 2);
+
+            let first = table.sessions.first().unwrap();
+            let second = table.sessions.get(1).unwrap();
+
+            assert_eq!(first.project.id, 2);
+            assert!(!first.is_started);
+            assert_eq!(second.project.id, 1);
+            assert!(!second.is_started);
+
+            // Start the selected session - by default the first row - which is project 2
+            table.handle_key_event(key(KeyCode::Char(' '))).unwrap();
+
+            // Assert that project 1 is started and project 2 is still stopped
+            assert_eq!(table.sessions.len(), 2);
+
+            let first = table.sessions.first().unwrap();
+            let second = table.sessions.get(1).unwrap();
+
+            assert_eq!(first.project.id, 2);
+            assert_eq!(first.total_seconds, 500);
+            assert!(first.is_started);
+            assert_eq!(second.project.id, 1);
+            assert_eq!(second.total_seconds, 500);
+            assert!(!second.is_started);
+
+            // Advance time by one second
+            table.tick();
+            thread::sleep(std::time::Duration::from_secs(1));
+
+            // Verify that the started project (2) has increased its number of seconds by 1
+            let first = table.sessions.first().unwrap();
+            let second = table.sessions.get(1).unwrap();
+
+            assert_eq!(first.total_seconds, 501);
+            assert_eq!(second.total_seconds, 500);
+
+            // Select the second row
+            table.handle_key_event(key(KeyCode::Down)).unwrap();
+            // Start the second session (projcet 1)
+            table.handle_key_event(key(KeyCode::Char(' '))).unwrap();
+
+            // Assert that project 1 has been started and that project 2 has been stopped
+            assert_eq!(table.sessions.len(), 2);
+
+            let first = table.sessions.first().unwrap();
+            let second = table.sessions.get(1).unwrap();
+
+            assert_eq!(first.project.id, 2);
+            assert!(!first.is_started);
+            assert_eq!(second.project.id, 1);
+            assert!(second.is_started);
+
+            // Advance time by two seconds
+            table.tick();
+            table.tick();
+            thread::sleep(std::time::Duration::from_secs(2));
+
+            // Stop the selected session (project 1)
+            table.handle_key_event(key(KeyCode::Char(' '))).unwrap();
+
+            // Assert that all projects have been stopped
+            assert_eq!(table.sessions.len(), 2);
+
+            let first = table.sessions.first().unwrap();
+            let second = table.sessions.get(1).unwrap();
+
+            assert_eq!(first.project.id, 2);
+            assert!(!first.is_started);
+            assert_eq!(second.project.id, 1);
+            assert!(!second.is_started);
         }
 
         #[test]
