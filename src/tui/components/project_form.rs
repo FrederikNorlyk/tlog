@@ -1,9 +1,10 @@
+use crate::tui::components::dialog::Dialog;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::prelude::{Color, Modifier, Stylize, Widget};
+use ratatui::prelude::{Color, Modifier, Widget};
 use ratatui::style::Style;
-use ratatui::widgets::{Block, Borders, Clear, Shadow};
+use ratatui::widgets::{Block, Borders};
 use ratatui_textarea::TextArea;
 
 pub struct ProjectForm<'a> {
@@ -132,22 +133,8 @@ impl ProjectForm<'_> {
 
 impl Widget for &ProjectForm<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let title = " Esc ".blue().bold().into_right_aligned_line();
-        let shadow = Shadow::overlay().black().on_yellow();
-
-        let block = Block::bordered()
-            .title(title)
-            .shadow(shadow)
-            .bg(Color::LightYellow)
-            .fg(Color::DarkGray);
-
-        // define popup area first
-        let popup_area = area.centered(Constraint::Length(60), Constraint::Length(10));
-        let inner = block.inner(popup_area);
-
-        // clear + render block on same area
-        Clear.render(popup_area, buf);
-        block.render(popup_area, buf);
+        let dialog = Dialog::constrained(Constraint::Percentage(90), Constraint::Length(10));
+        let inner = dialog.render(area, buf);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)

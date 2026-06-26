@@ -1,11 +1,12 @@
 use crate::core::format::Format;
 use crate::core::time_format::TimeFormat;
+use crate::tui::components::dialog::Dialog;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
-use ratatui::prelude::{Color, Stylize, Widget};
+use ratatui::prelude::{Color, Widget};
 use ratatui::style::Style;
-use ratatui::widgets::{Block, Borders, Clear, Shadow};
+use ratatui::widgets::{Block, Borders};
 use ratatui_textarea::TextArea;
 
 pub struct ManualSessionDialog<'a> {
@@ -87,22 +88,8 @@ impl<'a> ManualSessionDialog<'a> {
 
 impl Widget for &ManualSessionDialog<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let title = " Esc ".blue().bold().into_right_aligned_line();
-        let shadow = Shadow::overlay().black().on_yellow();
-
-        let block = Block::bordered()
-            .title(title)
-            .shadow(shadow)
-            .bg(Color::LightYellow)
-            .fg(Color::DarkGray);
-
-        // define popup area first
-        let popup_area = area.centered(Constraint::Length(60), Constraint::Length(5));
-        let inner = block.inner(popup_area);
-
-        // clear + render block on same area
-        Clear.render(popup_area, buf);
-        block.render(popup_area, buf);
+        let dialog = Dialog::constrained(Constraint::Length(60), Constraint::Length(5));
+        let inner = dialog.render(area, buf);
 
         self.text_area.render(inner, buf);
     }

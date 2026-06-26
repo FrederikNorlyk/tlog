@@ -1,4 +1,5 @@
 pub mod alert_dialog;
+mod dialog;
 pub mod manual_session_dialog;
 pub mod project_form;
 pub mod project_select;

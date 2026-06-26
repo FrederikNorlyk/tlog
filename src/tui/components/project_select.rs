@@ -1,14 +1,13 @@
 use crate::core::app_error::AppError;
 use crate::db::project_repository::ProjectRepository;
 use crate::model::project::Project;
+use crate::tui::components::dialog::Dialog;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style, Stylize};
+use ratatui::style::Style;
 use ratatui::text::Text;
-use ratatui::widgets::{
-    Block, Clear, List, ListDirection, ListItem, ListState, Shadow, StatefulWidget, Widget,
-};
+use ratatui::widgets::{List, ListDirection, ListItem, ListState, StatefulWidget, Widget};
 use ratatui_textarea::TextArea;
 use rusqlite::Connection;
 use time::Date;
@@ -102,21 +101,8 @@ impl<'a> ProjectSelect<'a> {
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        let title = " Esc ".blue().bold().into_right_aligned_line();
-        let shadow = Shadow::overlay().black().on_yellow();
-
-        let block = Block::bordered()
-            .title(title)
-            .shadow(shadow)
-            .bg(Color::LightYellow)
-            .fg(Color::DarkGray);
-
-        let popup_area = area.centered(Constraint::Percentage(60), Constraint::Percentage(60));
-        let inner = block.inner(popup_area);
-
-        // clear + render block on same area
-        Clear.render(popup_area, buf);
-        block.render(popup_area, buf);
+        let dialog = Dialog::constrained(Constraint::Percentage(90), Constraint::Percentage(70));
+        let inner = dialog.render(area, buf);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)

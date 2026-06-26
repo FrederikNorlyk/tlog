@@ -1,9 +1,10 @@
+use crate::tui::components::dialog::Dialog;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::prelude::Line;
-use ratatui::style::{Color, Stylize};
-use ratatui::widgets::{Block, Clear, Paragraph, Shadow, Widget, Wrap};
+use ratatui::style::Stylize;
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 pub struct AlertDialog {
     message: String,
@@ -34,7 +35,7 @@ impl AlertDialog {
 
 impl Widget for AlertDialog {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let title = " Esc ".blue().bold().into_right_aligned_line();
+        let mut dialog = Dialog::constrained(Constraint::Length(60), Constraint::Length(6));
 
         let instructions = Line::from(vec![
             "y".blue().bold(),
@@ -44,25 +45,13 @@ impl Widget for AlertDialog {
         ])
         .centered();
 
-        let shadow = Shadow::overlay().black().on_yellow();
+        dialog = dialog.title_bottom(instructions);
 
-        let block = Block::bordered()
-            .title(title)
-            .title_bottom(instructions)
-            .shadow(shadow)
-            .bg(Color::LightYellow)
-            .fg(Color::DarkGray);
+        let inner = dialog.render(area, buf);
 
-        let centered_area = area.centered(Constraint::Length(60), Constraint::Length(6));
+        let paragraph = Paragraph::new(self.message).wrap(Wrap { trim: true });
 
-        // clears out any background in the area before rendering the popup
-        Clear.render(centered_area, buf);
-
-        let paragraph = Paragraph::new(self.message)
-            .wrap(Wrap { trim: true })
-            .block(block);
-
-        paragraph.render(centered_area, buf);
+        paragraph.render(inner, buf);
     }
 }
 
