@@ -1,4 +1,5 @@
 use crate::core::app_error::AppError;
+use crate::core::clipboard::clipboard_backend::ClipboardBackend;
 use crate::core::config::Config;
 use crate::core::format::Format;
 use crate::core::time_format::TimeFormat;
@@ -8,7 +9,6 @@ use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
 use crate::tui::components::manual_session_dialog::{ManualSessionDialog, ManualSessionEvent};
 use crate::tui::components::project_select::{ProjectSelect, ProjectSelectEvent};
 use crate::tui::terminal_user_interface::{KeyEventResult, KeybindOverlay};
-use arboard::Clipboard;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Alignment, Constraint};
 use ratatui::style::{Color, Style};
@@ -18,7 +18,6 @@ use ratatui::{
     layout::Rect,
     style::Stylize,
     symbols::border,
-    text::Line,
     widgets::{Block, Cell, Row, StatefulWidget, Table, TableState, Widget},
 };
 use rusqlite::Connection;
@@ -35,6 +34,7 @@ pub struct SessionTable<'a> {
     is_showing_reset_alert_dialog: bool,
     is_showing_copy_keybinds: bool,
     manual_session_dialog: Option<ManualSessionDialog<'a>>,
+    clipboard: Box<dyn ClipboardBackend>,
 }
 
 impl<'a> SessionTable<'a> {
@@ -48,7 +48,8 @@ impl<'a> SessionTable<'a> {
         time_format: TimeFormat,
         date: Date,
         is_showing_copy_keybinds: bool,
-    ) -> rusqlite::Result<Self> {
+        clipboard: Box<dyn ClipboardBackend>,
+    ) -> Result<Self, AppError> {
         let mut state = TableState::default();
         let tracking = Tracking::new(connection);
         let sessions = tracking.list_all_sessions(date)?;
@@ -67,11 +68,8 @@ impl<'a> SessionTable<'a> {
             is_showing_reset_alert_dialog: false,
             is_showing_copy_keybinds,
             manual_session_dialog: None,
+            clipboard,
         })
-    }
-
-    pub fn set_is_showing_copy_keybinds(&mut self, value: bool) {
-        self.is_showing_copy_keybinds = value;
     }
 
     pub fn tick(&mut self) {
@@ -142,19 +140,7 @@ impl<'a> SessionTable<'a> {
         let mut table_block = Block::bordered().title(title).border_set(border::THICK);
 
         if is_active {
-            let instructions = Line::from(vec![
-                " Use ".into(),
-                "g/G".blue().bold(),
-                " to go top/bottom, ".into(),
-                "space".blue().bold(),
-                " to toggle tracking, ".into(),
-                "s".blue().bold(),
-                " to track a new project, ".into(),
-                "d".blue().bold(),
-                " to delete ".into(),
-            ]);
-
-            table_block = table_block.title_bottom(instructions.centered()).green();
+            table_block = table_block.green();
         }
 
         let table = Table::new(rows, widths)
@@ -242,6 +228,7 @@ impl<'a> SessionTable<'a> {
             }
 
             if did_match {
+                self.is_showing_copy_keybinds = false;
                 return Ok(KeyEventResult::Consumed);
             }
 
@@ -262,13 +249,15 @@ impl<'a> SessionTable<'a> {
             KeyCode::Char('d') if has_selected_session => self.is_showing_reset_alert_dialog = true,
             KeyCode::Char('D') if has_selected_session => self.reset_session()?,
             KeyCode::Char(' ') if has_selected_session => self.toggle_session()?,
-            KeyCode::Char('s') => {
+            KeyCode::Char('a') => {
                 self.project_select = Some(ProjectSelect::new(self.connection, self.date)?);
             }
-            KeyCode::Char('S') if has_selected_session => {
+            KeyCode::Char('e') if has_selected_session => {
                 self.manual_session_dialog = Some(ManualSessionDialog::new(self.time_format));
             }
             KeyCode::Char('c') if has_selected_session => {
+                self.is_showing_copy_keybinds = true;
+
                 return Ok(KeyEventResult::ShowKeybindOverlay {
                     overlay: KeybindOverlay::CopySession,
                 });
@@ -331,7 +320,7 @@ impl<'a> SessionTable<'a> {
         Ok(())
     }
 
-    fn copy_to_clipboard(&self, copy_content: CopyContent) -> Result<(), AppError> {
+    fn copy_to_clipboard(&mut self, copy_content: CopyContent) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
             return Err(AppError::InvalidState {
                 message: "No selected session",
@@ -375,8 +364,7 @@ impl<'a> SessionTable<'a> {
             }
         };
 
-        let mut clipboard = Clipboard::new()?;
-        clipboard.set_text(text)?;
+        self.clipboard.set_text(text)?;
 
         Ok(())
     }
@@ -419,6 +407,7 @@ enum CopyContent {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::core::clipboard::mock_clipboard::MockClipboard;
     use crate::db::db_test_context::DBTestContext;
     use crate::db::event_repository::EventRepository;
     use crate::db::manual_session_repository::ManualSessionRepository;
@@ -492,6 +481,7 @@ mod test {
                 TimeFormat::HoursMinutes,
                 get_test_date(),
                 false,
+                Box::new(MockClipboard::default()),
             )
             .unwrap();
 
@@ -521,6 +511,7 @@ mod test {
                 TimeFormat::HoursMinutes,
                 OffsetDateTime::now_utc().date(),
                 false,
+                Box::new(MockClipboard::default()),
             )
             .unwrap();
 
@@ -550,10 +541,11 @@ mod test {
                 TimeFormat::HoursMinutes,
                 get_test_date(),
                 false,
+                Box::new(MockClipboard::default()),
             )
             .unwrap();
 
-            table.handle_key_event(key(KeyCode::Char('s'))).unwrap();
+            table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
 
             let area = Rect::new(0, 0, 110, 10);
             let mut buf = Buffer::empty(area);
@@ -563,13 +555,13 @@ mod test {
             let expected = vec![
                 "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                                                                     00:15┃",
-                "┃Project A            ┌─────────────────────────────────────────────────────────── Esc ┐                01:31┃",
-                "┃                     │                                                                │                     ┃",
-                "┃                     │                                                                │                     ┃",
-                "┃                     │One more - With some other text                                 │                     ┃",
-                "┃                     │                                                                │                     ┃",
-                "┃                     └────────────────────────────────────────────────────────────────┘                     ┃",
-                "┃Total                                                                                                  01:46┃",
+                "┃Proje┌──────────────────────────────────────────────────────────────────────────────────────────── Esc ┐1:31┃",
+                "┃     │                                                                                                 │    ┃",
+                "┃     │                                                                                                 │    ┃",
+                "┃     │                                                                                                 │    ┃",
+                "┃     │One more - With some other text                                                                  │    ┃",
+                "┃     │                                                                                                 │    ┃",
+                "┃Total└─────────────────────────────────────────────────────────────────────────────────────────────────┘1:46┃",
                 "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
             ];
 
@@ -585,6 +577,7 @@ mod test {
                 TimeFormat::HoursMinutes,
                 get_test_date(),
                 false,
+                Box::new(MockClipboard::default()),
             )
             .unwrap();
 
@@ -620,10 +613,11 @@ mod test {
                 TimeFormat::HoursMinutes,
                 get_test_date(),
                 false,
+                Box::new(MockClipboard::default()),
             )
             .unwrap();
 
-            table.handle_key_event(key(KeyCode::Char('S'))).unwrap();
+            table.handle_key_event(key(KeyCode::Char('e'))).unwrap();
 
             let area = Rect::new(0, 0, 110, 11);
             let mut buf = Buffer::empty(area);
@@ -661,6 +655,7 @@ mod test {
                 TimeFormat::HoursMinutes,
                 get_test_date(),
                 false,
+                Box::new(MockClipboard::default()),
             )
             .unwrap();
 
@@ -732,6 +727,7 @@ mod test {
                 TimeFormat::HoursMinutes,
                 get_test_date(),
                 false,
+                Box::new(MockClipboard::default()),
             )
             .unwrap();
 
@@ -779,9 +775,14 @@ mod test {
             manual_session_repository.upsert(2, today, 500).unwrap();
             manual_session_repository.upsert(1, today, 500).unwrap();
 
-            let mut table =
-                SessionTable::new(context.connection(), TimeFormat::HoursMinutes, today, false)
-                    .unwrap();
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                today,
+                false,
+                Box::new(MockClipboard::default()),
+            )
+            .unwrap();
 
             // Assert that all sessions are stopped
             assert_eq!(table.sessions.len(), 2);
@@ -866,10 +867,11 @@ mod test {
                 TimeFormat::HoursMinutes,
                 get_test_date(),
                 false,
+                Box::new(MockClipboard::default()),
             )
             .unwrap();
 
-            let event = table.handle_key_event(key(KeyCode::Char('S'))).unwrap();
+            let event = table.handle_key_event(key(KeyCode::Char('e'))).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
             assert!(table.manual_session_dialog.is_some());
 
@@ -881,7 +883,7 @@ mod test {
             assert_eq!(event, KeyEventResult::Consumed);
             assert!(table.manual_session_dialog.is_none());
 
-            let event = table.handle_key_event(key(KeyCode::Char('S'))).unwrap();
+            let event = table.handle_key_event(key(KeyCode::Char('e'))).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
             assert!(table.manual_session_dialog.is_some());
 
@@ -902,12 +904,13 @@ mod test {
                 TimeFormat::HoursMinutes,
                 get_test_date(),
                 false,
+                Box::new(MockClipboard::default()),
             )
             .unwrap();
 
             assert!(table.project_select.is_none());
 
-            let event = table.handle_key_event(key(KeyCode::Char('s'))).unwrap();
+            let event = table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
             assert!(table.project_select.is_some());
 
@@ -915,7 +918,7 @@ mod test {
             assert_eq!(event, KeyEventResult::Consumed);
             assert!(table.project_select.is_none());
 
-            let event = table.handle_key_event(key(KeyCode::Char('s'))).unwrap();
+            let event = table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
             assert!(table.project_select.is_some());
 
@@ -937,37 +940,62 @@ mod test {
                 TimeFormat::HoursMinutes,
                 get_test_date(),
                 false,
+                Box::new(MockClipboard::default()),
             )
             .unwrap();
 
-            table.set_is_showing_copy_keybinds(true);
-
+            // "Copy keybinds overlay" can be closed with Esc
+            table.handle_key_event(key(KeyCode::Char('c'))).unwrap();
             let event = table.handle_key_event(key(KeyCode::Esc)).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
+            assert!(!table.is_showing_copy_keybinds);
 
+            // Overlay stays open with unused keys
+            table.handle_key_event(key(KeyCode::Char('c'))).unwrap();
             let event = table.handle_key_event(key(KeyCode::Char('x'))).unwrap();
             assert_eq!(event, KeyEventResult::Unused);
+            assert!(table.is_showing_copy_keybinds);
 
+            // 'c' copies all cells
             assert_clipboard_event(&mut table, 'c', "Another project;With a description;00:15");
+
+            // 'n' copies name
+            table.handle_key_event(key(KeyCode::Char('c'))).unwrap();
             assert_clipboard_event(&mut table, 'n', "Another project");
+            assert!(!table.is_showing_copy_keybinds);
+
+            // 'd' copies description
+            table.handle_key_event(key(KeyCode::Char('c'))).unwrap();
             assert_clipboard_event(&mut table, 'd', "With a description");
+            assert!(!table.is_showing_copy_keybinds);
+
+            // 't' copies time
+            table.handle_key_event(key(KeyCode::Char('c'))).unwrap();
             assert_clipboard_event(&mut table, 't', "00:15");
+            assert!(!table.is_showing_copy_keybinds);
+
+            // 'p' copies project's name and description
+            table.handle_key_event(key(KeyCode::Char('c'))).unwrap();
             assert_clipboard_event(&mut table, 'p', "Another project - With a description");
+            assert!(!table.is_showing_copy_keybinds);
 
-            table.set_is_showing_copy_keybinds(false);
+            // 'f' cycles time format
             table.handle_key_event(key(KeyCode::Char('f'))).unwrap();
-            table.set_is_showing_copy_keybinds(true);
+            table.handle_key_event(key(KeyCode::Char('c'))).unwrap();
             assert_clipboard_event(&mut table, 't', "00.25");
+            assert!(!table.is_showing_copy_keybinds);
 
-            table.set_is_showing_copy_keybinds(false);
+            // 'f' cycles time format
             table.handle_key_event(key(KeyCode::Char('f'))).unwrap();
-            table.set_is_showing_copy_keybinds(true);
+            table.handle_key_event(key(KeyCode::Char('c'))).unwrap();
             assert_clipboard_event(&mut table, 't', "900");
+            assert!(!table.is_showing_copy_keybinds);
 
-            table.set_is_showing_copy_keybinds(false);
+            // 'f' cycles time format
             table.handle_key_event(key(KeyCode::Char('f'))).unwrap();
-            table.set_is_showing_copy_keybinds(true);
+            table.handle_key_event(key(KeyCode::Char('c'))).unwrap();
             assert_clipboard_event(&mut table, 't', "00:15:00");
+            assert!(!table.is_showing_copy_keybinds);
         }
 
         fn assert_clipboard_event(
@@ -979,8 +1007,7 @@ mod test {
                 .handle_key_event(key(KeyCode::Char(pressed_key)))
                 .unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
-            let mut clipboard = Clipboard::new().unwrap();
-            let clipped_text = clipboard.get_text().unwrap();
+            let clipped_text = table.clipboard.get_text().unwrap();
             assert_eq!(clipped_text, expected_text);
         }
     }

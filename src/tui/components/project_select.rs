@@ -157,7 +157,7 @@ mod tests {
         KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL)
     }
 
-    fn initialze_context() -> DBTestContext {
+    fn initialize_context() -> DBTestContext {
         let context = DBTestContext::new().unwrap();
         let project_repository = ProjectRepository::new(context.connection());
 
@@ -179,7 +179,7 @@ mod tests {
 
         #[test]
         fn creates_with_empty_query() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let select = ProjectSelect::new(context.connection(), date!(2024 - 01 - 01));
 
@@ -192,7 +192,7 @@ mod tests {
 
         #[test]
         fn navigation_up_and_down() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut select =
                 ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
@@ -216,7 +216,7 @@ mod tests {
 
         #[test]
         fn first_project_selected_by_default() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut select =
                 ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
@@ -231,7 +231,7 @@ mod tests {
 
         #[test]
         fn typing_updates_query_and_refreshes_list() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut select =
                 ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
@@ -248,7 +248,7 @@ mod tests {
 
         #[test]
         fn returns_selected_id() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut select =
                 ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
@@ -262,7 +262,7 @@ mod tests {
 
         #[test]
         fn returns_none_when_no_selection() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut select =
                 ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
@@ -281,7 +281,7 @@ mod tests {
 
         #[test]
         fn renders_list_and_input() {
-            let context = initialze_context();
+            let context = initialize_context();
 
             let mut select =
                 ProjectSelect::new(context.connection(), date!(2024 - 01 - 01)).unwrap();
@@ -295,20 +295,20 @@ mod tests {
                 "                                                                      ",
                 "                                                                      ",
                 "                                                                      ",
-                "                                                                      ",
-                "              ┌─────────────────────────────────── Esc ┐              ",
-                "              │                                        │              ",
-                "              │                                        │              ",
-                "              │                                        │              ",
-                "              │                                        │              ",
-                "              │                                        │              ",
-                "              │                                        │              ",
-                "              │Project A                               │              ",
-                "              │One more - With some other text         │              ",
-                "              │Another project - With a description    │              ",
-                "              │                                        │              ",
-                "              └────────────────────────────────────────┘              ",
-                "                                                                      ",
+                "    ┌──────────────────────────────────────────────────────── Esc ┐   ",
+                "    │                                                             │   ",
+                "    │                                                             │   ",
+                "    │                                                             │   ",
+                "    │                                                             │   ",
+                "    │                                                             │   ",
+                "    │                                                             │   ",
+                "    │                                                             │   ",
+                "    │                                                             │   ",
+                "    │Project A                                                    │   ",
+                "    │One more - With some other text                              │   ",
+                "    │Another project - With a description                         │   ",
+                "    │                                                             │   ",
+                "    └─────────────────────────────────────────────────────────────┘   ",
                 "                                                                      ",
                 "                                                                      ",
                 "                                                                      ",

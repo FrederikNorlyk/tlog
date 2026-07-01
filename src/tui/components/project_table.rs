@@ -70,16 +70,7 @@ impl<'a> ProjectTable<'a> {
         let mut table_block = Block::bordered().title(title).border_set(border::THICK);
 
         if is_active {
-            let instructions = Line::from(vec![
-                " Use ".into(),
-                "g/G".blue().bold(),
-                " to go top/bottom, ".into(),
-                "a".blue().bold(),
-                " to add a new project ".into(),
-            ])
-            .centered();
-
-            table_block = table_block.title_bottom(instructions).green();
+            table_block = table_block.green();
         }
 
         let table = Table::new(rows, widths)
@@ -119,8 +110,16 @@ impl<'a> ProjectTable<'a> {
             return Ok(KeyEventResult::Consumed);
         } else if let Some(form) = &mut self.project_form {
             match form.handle_key_event(key_event) {
-                ProjectFormEvent::Save { name, description } => {
+                ProjectFormEvent::Create { name, description } => {
                     self.insert_project(name.as_str(), description.as_deref())?;
+                    self.project_form = None;
+                }
+                ProjectFormEvent::Update {
+                    id,
+                    name,
+                    description,
+                } => {
+                    self.update_project(id, name.as_str(), description.as_deref())?;
                     self.project_form = None;
                 }
                 ProjectFormEvent::Cancel => {
@@ -141,7 +140,8 @@ impl<'a> ProjectTable<'a> {
             KeyCode::Char('k') | KeyCode::Up => self.state.select_previous(),
             KeyCode::Char('g') | KeyCode::Home => self.state.select_first(),
             KeyCode::Char('G') | KeyCode::End => self.state.select_last(),
-            KeyCode::Char('a') => self.project_form = Some(ProjectForm::new(None, None)),
+            KeyCode::Char('a') => self.project_form = Some(ProjectForm::new(None, None, None)),
+            KeyCode::Char('e') if has_selected_project => self.edit_project()?,
             KeyCode::Char('d') if has_selected_project => {
                 self.is_showing_deletion_alert_dialog = true;
             }
@@ -170,9 +170,40 @@ impl<'a> ProjectTable<'a> {
         Ok(())
     }
 
+    fn edit_project(&mut self) -> Result<(), AppError> {
+        let Some(project) = self.get_selected_project() else {
+            return Err(AppError::InvalidState {
+                message: "No selected project",
+            });
+        };
+
+        self.project_form = Some(ProjectForm::new(
+            Some(project.id),
+            Some(project.name.clone()),
+            project.description.clone(),
+        ));
+
+        Ok(())
+    }
+
     fn insert_project(&mut self, name: &str, description: Option<&str>) -> Result<(), AppError> {
         let project_repository = ProjectRepository::new(self.connection);
         project_repository.insert(name, description)?;
+        self.refresh_projects()?;
+
+        Ok(())
+    }
+
+    fn update_project(
+        &mut self,
+        id: i32,
+        name: &str,
+        description: Option<&str>,
+    ) -> Result<(), AppError> {
+        let project_repository = ProjectRepository::new(self.connection);
+        let project = Project::new(id, name, description);
+
+        project_repository.update(&project)?;
         self.refresh_projects()?;
 
         Ok(())
@@ -204,7 +235,7 @@ mod tests {
     use crate::db::db_test_context::DBTestContext;
     use crossterm::event::KeyModifiers;
 
-    fn initialze_context() -> DBTestContext {
+    fn initialize_context() -> DBTestContext {
         let context = DBTestContext::new().unwrap();
         let project_repository = ProjectRepository::new(context.connection());
 
@@ -231,7 +262,7 @@ mod tests {
 
         #[test]
         fn table_of_projects() {
-            let context = initialze_context();
+            let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
             let area = Rect::new(0, 0, 60, 5);
             let mut buf = Buffer::empty(area);
@@ -251,7 +282,7 @@ mod tests {
 
         #[test]
         fn project_form() {
-            let context = initialze_context();
+            let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
             table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
             let area = Rect::new(0, 0, 70, 17);
@@ -264,16 +295,16 @@ mod tests {
                 "┃Another project With a description                                  ┃",
                 "┃One more        With some other text                                ┃",
                 "┃Project A                                                           ┃",
-                "┃    ┌───────────────────────────────────────────────────── Esc ┐    ┃",
-                "┃    │┌Name────────────────────────────────────────────────────┐│    ┃",
-                "┃    ││                                                        ││    ┃",
-                "┃    │└────────────────────────────────────────────────────────┘│    ┃",
-                "┃    │┌Description─────────────────────────────────────────────┐│    ┃",
-                "┃    ││                                                        ││    ┃",
-                "┃    ││                                                        ││    ┃",
-                "┃    ││                                                        ││    ┃",
-                "┃    │└────────────────────────────────────────────────────────┘│    ┃",
-                "┃    └──────────────────────────────────────────────────────────┘    ┃",
+                "┃   ┌──────────────────────────────────────────────────────── Esc ┐  ┃",
+                "┃   │┌Name───────────────────────────────────────────────────────┐│  ┃",
+                "┃   ││                                                           ││  ┃",
+                "┃   │└───────────────────────────────────────────────────────────┘│  ┃",
+                "┃   │┌Description────────────────────────────────────────────────┐│  ┃",
+                "┃   ││                                                           ││  ┃",
+                "┃   ││                                                           ││  ┃",
+                "┃   ││                                                           ││  ┃",
+                "┃   │└───────────────────────────────────────────────────────────┘│  ┃",
+                "┃   └─────────────────────────────────────────────────────────────┘  ┃",
                 "┃                                                                    ┃",
                 "┃                                                                    ┃",
                 "┗━━━━━━━━━ Use g/G to go top/bottom, a to add a new project ━━━━━━━━━┛",
@@ -284,7 +315,7 @@ mod tests {
 
         #[test]
         fn delete_dialog() {
-            let context = initialze_context();
+            let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
             table.handle_key_event(key(KeyCode::Down)).unwrap();
             table.handle_key_event(key(KeyCode::Char('d'))).unwrap();
@@ -318,7 +349,7 @@ mod tests {
 
         #[test]
         fn is_showing_delete_alert_dialog() {
-            let context = initialze_context();
+            let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
 
             // Select first row and press 'd' to show delete dialog
@@ -350,7 +381,7 @@ mod tests {
 
         #[test]
         fn is_showing_project_form() {
-            let context = initialze_context();
+            let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
 
             // Press 'a' to show project form
@@ -391,8 +422,75 @@ mod tests {
         }
 
         #[test]
+        fn edit_project() {
+            let context = initialize_context();
+            let mut table = ProjectTable::new(context.connection()).unwrap();
+
+            // Select first row and press 'e' to show the edit dialog
+            assert!(!table.is_showing_deletion_alert_dialog);
+            table.handle_key_event(key(KeyCode::Down)).unwrap();
+            table.handle_key_event(key(KeyCode::Char('e'))).unwrap();
+            assert!(table.project_form.is_some());
+
+            // Immediately submit without changing anything
+            table.handle_key_event(key(KeyCode::Enter)).unwrap();
+            let first = table.projects.first().unwrap();
+            let second = table.projects.get(1).unwrap();
+            let third = table.projects.get(2).unwrap();
+
+            // Verify that nothing changed
+            assert_eq!(first.name, "Another project");
+            assert_eq!(first.description, Some("With a description".to_string()));
+            assert_eq!(second.name, "One more");
+            assert_eq!(second.description, Some("With some other text".to_string()));
+            assert_eq!(third.name, "Project A",);
+            assert!(third.description.is_none());
+
+            // Test that description can be cleared
+            table.handle_key_event(key(KeyCode::Char('e'))).unwrap();
+            assert!(table.project_form.is_some());
+            table.handle_key_event(key(KeyCode::Tab)).unwrap();
+            for _i in 0.."With a description".len() {
+                table.handle_key_event(key(KeyCode::Delete)).unwrap();
+            }
+            table.handle_key_event(key(KeyCode::Enter)).unwrap();
+
+            let first = table.projects.first().unwrap();
+            let second = table.projects.get(1).unwrap();
+            let third = table.projects.get(2).unwrap();
+
+            // Verify that the description was set to None
+            assert_eq!(first.name, "Another project");
+            assert!(first.description.is_none());
+            assert_eq!(second.name, "One more");
+            assert_eq!(second.description, Some("With some other text".to_string()));
+            assert_eq!(third.name, "Project A",);
+            assert!(third.description.is_none());
+
+            // Test that both fields can be modified
+            table.handle_key_event(key(KeyCode::Char('e'))).unwrap();
+            assert!(table.project_form.is_some());
+            table.handle_key_event(key(KeyCode::Char('x'))).unwrap();
+            table.handle_key_event(key(KeyCode::Tab)).unwrap();
+            table.handle_key_event(key(KeyCode::Char('y'))).unwrap();
+            table.handle_key_event(key(KeyCode::Enter)).unwrap();
+
+            let first = table.projects.first().unwrap();
+            let second = table.projects.get(1).unwrap();
+            let third = table.projects.get(2).unwrap();
+
+            // Verify that both fields have been modifeid and that sorting has changed
+            assert_eq!(first.name, "One more");
+            assert_eq!(first.description, Some("With some other text".to_string()));
+            assert_eq!(second.name, "Project A",);
+            assert!(second.description.is_none());
+            assert_eq!(third.name, "xAnother project");
+            assert_eq!(third.description, Some("y".to_string()));
+        }
+
+        #[test]
         fn navigation() {
-            let context = initialze_context();
+            let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
 
             assert!(table.get_selected_project().is_none());
@@ -431,7 +529,7 @@ mod tests {
 
         #[test]
         fn force_delete() {
-            let context = initialze_context();
+            let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
 
             assert_eq!(table.projects.len(), 3);
@@ -449,7 +547,7 @@ mod tests {
 
         #[test]
         fn unused_key() {
-            let context = initialze_context();
+            let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
 
             let event = table.handle_key_event(key(KeyCode::Char('w'))).unwrap();

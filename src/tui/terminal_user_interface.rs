@@ -1,5 +1,7 @@
 use crate::core::app_error::AppError;
+use crate::core::clipboard::system_clipboard::SystemClipboard;
 use crate::core::config::Config;
+use crate::tui::components::keybinds_dialog::{Keybind, KeybindDialogEvent, KeybindsDialog};
 use crate::tui::components::project_table::ProjectTable;
 use crate::tui::components::session_table::SessionTable;
 use crossterm::event;
@@ -25,6 +27,7 @@ pub struct TerminalUserInterface<'a> {
     project_table: ProjectTable<'a>,
     active_widget: ActiveWidget,
     active_overlay: Option<KeybindOverlay>,
+    keybind_dialog: Option<KeybindsDialog<'a>>,
 }
 
 impl<'a> TerminalUserInterface<'a> {
@@ -38,11 +41,18 @@ impl<'a> TerminalUserInterface<'a> {
         let date = OffsetDateTime::now_utc().date();
 
         Ok(Self {
-            session_table: SessionTable::new(connection, time_format, date, false)?,
+            session_table: SessionTable::new(
+                connection,
+                time_format,
+                date,
+                false,
+                Box::new(SystemClipboard::new()?),
+            )?,
             project_table: ProjectTable::new(connection)?,
             exit: false,
             active_widget: ActiveWidget::SessionTable,
             active_overlay: None,
+            keybind_dialog: None,
         })
     }
 
@@ -99,19 +109,33 @@ impl<'a> TerminalUserInterface<'a> {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<(), AppError> {
+        if let Some(keybind_dialog) = &mut self.keybind_dialog {
+            match keybind_dialog.handle_key_event(key_event) {
+                KeybindDialogEvent::Closed => self.keybind_dialog = None,
+                KeybindDialogEvent::Consumed => return Ok(()),
+            }
+        } else if key_event.code == KeyCode::Char('?') {
+            let keybinds = match self.active_widget {
+                ActiveWidget::SessionTable => vec![Keybind::new(
+                    "a".to_string(),
+                    "Track a new project".to_string(),
+                )],
+                ActiveWidget::ProjectTable => vec![Keybind::new(
+                    "a".to_string(),
+                    "Add a new project".to_string(),
+                )],
+            };
+            self.keybind_dialog = Some(KeybindsDialog::new(keybinds));
+            return Ok(());
+        }
+
         let result = match self.active_widget {
             ActiveWidget::SessionTable => self.session_table.handle_key_event(key_event)?,
             ActiveWidget::ProjectTable => self.project_table.handle_key_event(key_event)?,
         };
 
-        if result == KeyEventResult::Consumed
-            && let Some(overlay) = &self.active_overlay
-        {
-            match overlay {
-                KeybindOverlay::CopySession => {
-                    self.session_table.set_is_showing_copy_keybinds(false);
-                }
-            }
+        // Hide any potential overlay
+        if result == KeyEventResult::Consumed {
             self.active_overlay = None;
         }
 
@@ -125,7 +149,6 @@ impl<'a> TerminalUserInterface<'a> {
             KeyEventResult::Consumed => {}
             KeyEventResult::ShowKeybindOverlay { overlay } => {
                 self.active_overlay = Some(overlay);
-                self.session_table.set_is_showing_copy_keybinds(true);
             }
         }
 
@@ -140,20 +163,60 @@ impl<'a> TerminalUserInterface<'a> {
 impl Widget for &mut TerminalUserInterface<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Fill(1), Constraint::Fill(1)])
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Fill(1), Constraint::Length(1)])
             .split(area);
 
+        let main_area = chunks[0];
+
+        let main_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Fill(1), Constraint::Fill(1)])
+            .split(main_area);
+
         self.project_table.render(
-            chunks[0],
+            main_chunks[0],
             buf,
             self.active_widget == ActiveWidget::ProjectTable,
         );
         self.session_table.render(
-            chunks[1],
+            main_chunks[1],
             buf,
             self.active_widget == ActiveWidget::SessionTable,
         );
+
+        let keybind_hint_area = chunks[1];
+
+        let mut spans = match self.active_widget {
+            ActiveWidget::ProjectTable => vec![
+                " Use ".into(),
+                "a".blue().bold(),
+                " to add, ".into(),
+                "e".blue().bold(),
+                " to edit, ".into(),
+                "d".blue().bold(),
+                " to delete, ".into(),
+            ],
+            ActiveWidget::SessionTable => vec![
+                " Use ".into(),
+                "a".blue().bold(),
+                " to track a new project, ".into(),
+                "e".blue().bold(),
+                " to edit time, ".into(),
+                "d".blue().bold(),
+                " to delete, ".into(),
+                "space".blue().bold(),
+                " to toggle tracking, ".into(),
+            ],
+        };
+
+        spans.extend(["?".blue().bold(), " for keybinds ".into()]);
+
+        Paragraph::new(Line::from(spans)).render(keybind_hint_area, buf);
+
+        let version_text = format!("v {}", env!("CARGO_PKG_VERSION"));
+        let version_line = Line::from(version_text).yellow().right_aligned();
+        Paragraph::new(version_line).render(keybind_hint_area, buf);
 
         if let Some(overlay) = &self.active_overlay {
             let overlay_area = Rect {
@@ -194,6 +257,10 @@ impl Widget for &mut TerminalUserInterface<'_> {
                 .alignment(ratatui::layout::Alignment::Center)
                 .render(paragraph_area, buf);
         }
+
+        if let Some(keybind_dialog) = &mut self.keybind_dialog {
+            keybind_dialog.render(area, buf);
+        }
     }
 }
 
@@ -208,48 +275,3 @@ pub enum KeyEventResult {
 pub enum KeybindOverlay {
     CopySession,
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use ratatui::style::Style;
-//
-//     #[test]
-//     fn render() {
-//         let app = App::default();
-//         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 4));
-//
-//         app.render(buf.area, &mut buf);
-//
-//         let mut expected = Buffer::with_lines(vec![
-//             "┏━━━━━━━━━━━━━ Counter App Tutorial ━━━━━━━━━━━━━┓",
-//             "┃                    Value: 0                    ┃",
-//             "┃                                                ┃",
-//             "┗━ Decrement <Left> Increment <Right> Quit <Q> ━━┛",
-//         ]);
-//         let title_style = Style::new().bold();
-//         let counter_style = Style::new().yellow();
-//         let key_style = Style::new().blue().bold();
-//         expected.set_style(Rect::new(14, 0, 22, 1), title_style);
-//         expected.set_style(Rect::new(28, 1, 1, 1), counter_style);
-//         expected.set_style(Rect::new(13, 3, 6, 1), key_style);
-//         expected.set_style(Rect::new(30, 3, 7, 1), key_style);
-//         expected.set_style(Rect::new(43, 3, 4, 1), key_style);
-//
-//         assert_eq!(buf, expected);
-//     }
-//
-//     #[test]
-//     fn handle_key_event() {
-//         let mut app = App::default();
-//         app.handle_key_event(KeyCode::Right.into());
-//         assert_eq!(app.counter, 1);
-//
-//         app.handle_key_event(KeyCode::Left.into());
-//         assert_eq!(app.counter, 0);
-//
-//         let mut app = App::default();
-//         app.handle_key_event(KeyCode::Char('q').into());
-//         assert!(app.exit);
-//     }
-// }

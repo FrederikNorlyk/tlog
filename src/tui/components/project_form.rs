@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, Borders};
 use ratatui_textarea::TextArea;
 
 pub struct ProjectForm<'a> {
+    id: Option<i32>,
     name_text_area: TextArea<'a>,
     description_text_area: TextArea<'a>,
     is_name_focused: bool,
@@ -15,7 +16,7 @@ pub struct ProjectForm<'a> {
 
 impl ProjectForm<'_> {
     #[must_use]
-    pub fn new(name: Option<String>, description: Option<String>) -> Self {
+    pub fn new(id: Option<i32>, name: Option<String>, description: Option<String>) -> Self {
         let mut name_text_area = TextArea::new(vec![name.unwrap_or_default()]);
         name_text_area.set_style(Style::default().fg(Color::DarkGray));
 
@@ -40,6 +41,7 @@ impl ProjectForm<'_> {
         description_text_area.set_cursor_style(Style::default());
 
         Self {
+            id,
             name_text_area,
             description_text_area,
             is_name_focused: true,
@@ -53,9 +55,17 @@ impl ProjectForm<'_> {
             KeyCode::Enter => {
                 let is_valid = self.validate_form();
                 if is_valid {
-                    return ProjectFormEvent::Save {
-                        name: self.get_name_value(),
-                        description: self.get_description_value(),
+                    return if let Some(id) = self.id {
+                        ProjectFormEvent::Update {
+                            id,
+                            name: self.get_name_value(),
+                            description: self.get_description_value(),
+                        }
+                    } else {
+                        ProjectFormEvent::Create {
+                            name: self.get_name_value(),
+                            description: self.get_description_value(),
+                        }
                     };
                 }
             }
@@ -147,7 +157,12 @@ impl Widget for &ProjectForm<'_> {
 }
 
 pub enum ProjectFormEvent {
-    Save {
+    Create {
+        name: String,
+        description: Option<String>,
+    },
+    Update {
+        id: i32,
         name: String,
         description: Option<String>,
     },
@@ -169,7 +184,7 @@ mod tests {
 
         #[test]
         fn esc_returns_cancel() {
-            let mut form = ProjectForm::new(None, None);
+            let mut form = ProjectForm::new(None, None, None);
 
             let event = form.handle_key_event(key(KeyCode::Esc));
 
@@ -181,7 +196,7 @@ mod tests {
 
         #[test]
         fn tab_toggles_focus_and_consumes() {
-            let mut form = ProjectForm::new(None, None);
+            let mut form = ProjectForm::new(None, None, None);
 
             let event = form.handle_key_event(key(KeyCode::Tab));
 
@@ -195,12 +210,12 @@ mod tests {
 
         #[test]
         fn enter_with_valid_name_returns_save() {
-            let mut form = ProjectForm::new(Some("Project".into()), Some("desc".into()));
+            let mut form = ProjectForm::new(None, Some("Project".into()), Some("desc".into()));
 
             let event = form.handle_key_event(key(KeyCode::Enter));
 
             match event {
-                ProjectFormEvent::Save { name, description } => {
+                ProjectFormEvent::Create { name, description } => {
                     assert_eq!(name, "Project");
                     assert_eq!(description, Some("desc".to_string()));
                 }
@@ -210,7 +225,7 @@ mod tests {
 
         #[test]
         fn enter_with_invalid_name_returns_consumed_and_marks_invalid() {
-            let mut form = ProjectForm::new(None, None);
+            let mut form = ProjectForm::new(None, None, None);
 
             let event = form.handle_key_event(key(KeyCode::Enter));
 
@@ -222,7 +237,7 @@ mod tests {
 
         #[test]
         fn typing_goes_to_name_field_when_focused() {
-            let mut form = ProjectForm::new(None, None);
+            let mut form = ProjectForm::new(None, None, None);
 
             form.handle_key_event(key(KeyCode::Char('a')));
 
@@ -231,7 +246,7 @@ mod tests {
 
         #[test]
         fn typing_goes_to_description_when_not_focused() {
-            let mut form = ProjectForm::new(None, None);
+            let mut form = ProjectForm::new(None, None, None);
 
             form.toggle_focused_field();
 
@@ -246,7 +261,7 @@ mod tests {
 
         #[test]
         fn returns_trimmed_name() {
-            let form = ProjectForm::new(Some("  My Project  ".into()), None);
+            let form = ProjectForm::new(None, Some("  My Project  ".into()), None);
             let value = form.get_name_value();
 
             assert_eq!(value, "My Project");
@@ -254,7 +269,7 @@ mod tests {
 
         #[test]
         fn returns_empty_string_when_missing() {
-            let form = ProjectForm::new(None, None);
+            let form = ProjectForm::new(None, None, None);
 
             assert_eq!(form.get_name_value(), "");
         }
@@ -265,7 +280,7 @@ mod tests {
 
         #[test]
         fn returns_some_trimmed_description() {
-            let form = ProjectForm::new(Some("Name".into()), Some("  desc  ".into()));
+            let form = ProjectForm::new(None, Some("Name".into()), Some("  desc  ".into()));
             let value = form.get_description_value();
 
             assert_eq!(value, Some("desc".to_string()));
@@ -273,14 +288,14 @@ mod tests {
 
         #[test]
         fn returns_none_when_empty() {
-            let form = ProjectForm::new(Some("Name".into()), None);
+            let form = ProjectForm::new(None, Some("Name".into()), None);
 
             assert_eq!(form.get_description_value(), None);
         }
 
         #[test]
         fn returns_none_when_whitespace_only() {
-            let form = ProjectForm::new(Some("Name".into()), Some("   ".into()));
+            let form = ProjectForm::new(None, Some("Name".into()), Some("   ".into()));
 
             assert_eq!(form.get_description_value(), None);
         }
@@ -291,7 +306,7 @@ mod tests {
 
         #[test]
         fn toggles_focus_flag() {
-            let mut form = ProjectForm::new(None, None);
+            let mut form = ProjectForm::new(None, None, None);
 
             assert!(form.is_name_focused);
 
@@ -308,7 +323,7 @@ mod tests {
 
         #[test]
         fn invalid_when_name_empty() {
-            let mut form = ProjectForm::new(None, None);
+            let mut form = ProjectForm::new(None, None, None);
 
             let result = form.validate_form();
 
@@ -317,7 +332,7 @@ mod tests {
 
         #[test]
         fn valid_when_name_present() {
-            let mut form = ProjectForm::new(Some("Project".into()), None);
+            let mut form = ProjectForm::new(None, Some("Project".into()), None);
 
             let result = form.validate_form();
 
@@ -332,6 +347,7 @@ mod tests {
         #[test]
         fn form_with_values() {
             let form = ProjectForm::new(
+                None,
                 Some("My Project".to_string()),
                 Some("My Description".to_string()),
             );
@@ -341,16 +357,16 @@ mod tests {
             form.render(buf.area, &mut buf);
 
             let expected = vec![
-                " ┌───────────────────────────────────────────────────── Esc ┐",
-                " │┌Name────────────────────────────────────────────────────┐│",
-                " ││My Project                                              ││",
-                " │└────────────────────────────────────────────────────────┘│",
-                " │┌Description─────────────────────────────────────────────┐│",
-                " ││My Description                                          ││",
-                " ││                                                        ││",
-                " ││                                                        ││",
-                " │└────────────────────────────────────────────────────────┘│",
-                " └──────────────────────────────────────────────────────────┘",
+                "   ┌──────────────────────────────────────────────── Esc ┐   ",
+                "   │┌Name───────────────────────────────────────────────┐│   ",
+                "   ││My Project                                         ││   ",
+                "   │└───────────────────────────────────────────────────┘│   ",
+                "   │┌Description────────────────────────────────────────┐│   ",
+                "   ││My Description                                     ││   ",
+                "   ││                                                   ││   ",
+                "   ││                                                   ││   ",
+                "   │└───────────────────────────────────────────────────┘│   ",
+                "   └─────────────────────────────────────────────────────┘   ",
             ];
 
             RenderTestUtil::assert_eq(expected, &buf);
@@ -358,22 +374,22 @@ mod tests {
 
         #[test]
         fn empty_form() {
-            let form = ProjectForm::new(None, None);
+            let form = ProjectForm::new(None, None, None);
             let mut buf = Buffer::empty(Rect::new(0, 0, 61, 10));
 
             form.render(buf.area, &mut buf);
 
             let expected = vec![
-                " ┌───────────────────────────────────────────────────── Esc ┐",
-                " │┌Name────────────────────────────────────────────────────┐│",
-                " ││                                                        ││",
-                " │└────────────────────────────────────────────────────────┘│",
-                " │┌Description─────────────────────────────────────────────┐│",
-                " ││                                                        ││",
-                " ││                                                        ││",
-                " ││                                                        ││",
-                " │└────────────────────────────────────────────────────────┘│",
-                " └──────────────────────────────────────────────────────────┘",
+                "   ┌──────────────────────────────────────────────── Esc ┐   ",
+                "   │┌Name───────────────────────────────────────────────┐│   ",
+                "   ││                                                   ││   ",
+                "   │└───────────────────────────────────────────────────┘│   ",
+                "   │┌Description────────────────────────────────────────┐│   ",
+                "   ││                                                   ││   ",
+                "   ││                                                   ││   ",
+                "   ││                                                   ││   ",
+                "   │└───────────────────────────────────────────────────┘│   ",
+                "   └─────────────────────────────────────────────────────┘   ",
             ];
 
             RenderTestUtil::assert_eq(expected, &buf);
