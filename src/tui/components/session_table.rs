@@ -6,13 +6,14 @@ use crate::core::time_format::TimeFormat;
 use crate::core::tracking::Tracking;
 use crate::model::session::Session;
 use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
+use crate::tui::components::keybinds_dialog::Keybind;
 use crate::tui::components::manual_session_dialog::{ManualSessionDialog, ManualSessionEvent};
 use crate::tui::components::project_select::{ProjectSelect, ProjectSelectEvent};
 use crate::tui::terminal_user_interface::{KeyEventResult, KeybindOverlay};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint};
 use ratatui::style::{Color, Style};
-use ratatui::text::Text;
+use ratatui::text::{Span, Text};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -27,7 +28,7 @@ use time::{Date, Duration, OffsetDateTime};
 pub struct SessionTable<'a> {
     sessions: Vec<Session>,
     date: Date,
-    state: TableState,
+    table_state: TableState,
     connection: &'a Connection,
     time_format: TimeFormat,
     project_select: Option<ProjectSelect<'a>>,
@@ -35,6 +36,7 @@ pub struct SessionTable<'a> {
     is_showing_copy_keybinds: bool,
     manual_session_dialog: Option<ManualSessionDialog<'a>>,
     clipboard: Box<dyn ClipboardBackend>,
+    table_height: u16,
 }
 
 impl<'a> SessionTable<'a> {
@@ -50,18 +52,18 @@ impl<'a> SessionTable<'a> {
         is_showing_copy_keybinds: bool,
         clipboard: Box<dyn ClipboardBackend>,
     ) -> Result<Self, AppError> {
-        let mut state = TableState::default();
+        let mut table_state = TableState::default();
         let tracking = Tracking::new(connection);
         let sessions = tracking.list_all_sessions(date)?;
 
         if !sessions.is_empty() {
-            state.select_next();
+            table_state.select_next();
         }
 
         Ok(Self {
             sessions,
             date,
-            state,
+            table_state,
             connection,
             time_format,
             project_select: None,
@@ -69,6 +71,7 @@ impl<'a> SessionTable<'a> {
             is_showing_copy_keybinds,
             manual_session_dialog: None,
             clipboard,
+            table_height: 0,
         })
     }
 
@@ -126,11 +129,11 @@ impl<'a> SessionTable<'a> {
         ];
 
         let title = if self.date == OffsetDateTime::now_utc().date() {
-            " [2] Today".to_string()
+            " [2] Today ".to_string()
         } else {
             let format = format_description!("[weekday repr:long], [day] [month repr:long] [year]");
             format!(
-                " [2] {}",
+                " [2] {} ",
                 self.date
                     .format(&format)
                     .unwrap_or_else(|_| self.date.to_string())
@@ -148,7 +151,9 @@ impl<'a> SessionTable<'a> {
             .row_highlight_style(Style::new().reversed())
             .footer(footer);
 
-        StatefulWidget::render(table, area, buf, &mut self.state);
+        StatefulWidget::render(table, area, buf, &mut self.table_state);
+
+        self.table_height = area.height - 3; // Subtract block borders and "Total" footer
 
         if let Some(project_select) = &mut self.project_select {
             project_select.render(area, buf);
@@ -236,17 +241,25 @@ impl<'a> SessionTable<'a> {
         }
 
         let has_selected_session = self.get_selected_session().is_some();
+        let half_page = self.table_height.saturating_sub(1) / 2;
+        let ctrl_key_is_held = key_event.modifiers.contains(KeyModifiers::CONTROL);
 
         let mut did_match = true;
 
         match key_event.code {
             KeyCode::Char('h') | KeyCode::Left => self.shift_date(Duration::days(-1))?,
             KeyCode::Char('l') | KeyCode::Right => self.shift_date(Duration::days(1))?,
-            KeyCode::Char('j') | KeyCode::Down => self.state.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => self.state.select_previous(),
-            KeyCode::Char('g') | KeyCode::Home => self.state.select_first(),
-            KeyCode::Char('G') | KeyCode::End => self.state.select_last(),
-            KeyCode::Char('d') if has_selected_session => self.is_showing_reset_alert_dialog = true,
+            KeyCode::Char('j') | KeyCode::Down => self.table_state.select_next(),
+            KeyCode::Char('k') | KeyCode::Up => self.table_state.select_previous(),
+            KeyCode::Char('u') if ctrl_key_is_held => self.table_state.scroll_up_by(half_page),
+            KeyCode::Char('d') if ctrl_key_is_held => self.table_state.scroll_down_by(half_page),
+            KeyCode::PageUp => self.table_state.scroll_up_by(self.table_height),
+            KeyCode::PageDown => self.table_state.scroll_down_by(self.table_height),
+            KeyCode::Char('g') | KeyCode::Home => self.table_state.select_first(),
+            KeyCode::Char('G') | KeyCode::End => self.table_state.select_last(),
+            KeyCode::Char('d') | KeyCode::Delete if has_selected_session => {
+                self.is_showing_reset_alert_dialog = true;
+            }
             KeyCode::Char('D') if has_selected_session => self.reset_session()?,
             KeyCode::Char(' ') if has_selected_session => self.toggle_session()?,
             KeyCode::Char('a') => {
@@ -274,7 +287,7 @@ impl<'a> SessionTable<'a> {
     }
 
     fn shift_date(&mut self, duration: Duration) -> Result<(), AppError> {
-        // Overflowing current date is not an issue so using expect here is fine.
+        // Overflowing current date is not an issue, so using expect here is fine.
         self.date = self
             .date
             .checked_add(duration)
@@ -374,7 +387,7 @@ impl<'a> SessionTable<'a> {
     }
 
     fn get_selected_session(&self) -> Option<&Session> {
-        let selected_index = self.state.selected()?;
+        let selected_index = self.table_state.selected()?;
 
         self.sessions.get(selected_index)
     }
@@ -393,6 +406,51 @@ impl<'a> SessionTable<'a> {
 
         Ok(())
     }
+
+    #[must_use]
+    pub fn get_keybinds() -> Vec<Keybind> {
+        vec![
+            Keybind::new("a".to_string(), "Track a new project".to_string()),
+            Keybind::new("e".to_string(), "Edit tracked time".to_string()),
+            Keybind::new("space".to_string(), "Toggle time tracking".to_string()),
+            Keybind::new("d".to_string(), "Delete session".to_string()),
+            Keybind::new("delete".to_string(), "Delete session".to_string()),
+            Keybind::new("D".to_string(), "Force delete session".to_string()),
+            Keybind::new("c".to_string(), "Copy".to_string()),
+            Keybind::new("f".to_string(), "Change time format".to_string()),
+            Keybind::new("k".to_string(), "Select previous row".to_string()),
+            Keybind::new("↑".to_string(), "Select previous row".to_string()),
+            Keybind::new("j".to_string(), "Select next row".to_string()),
+            Keybind::new("↓".to_string(), "Select next row".to_string()),
+            Keybind::new("g".to_string(), "Select first row".to_string()),
+            Keybind::new("home".to_string(), "Select first row".to_string()),
+            Keybind::new("G".to_string(), "Select last row".to_string()),
+            Keybind::new("end".to_string(), "Select last row".to_string()),
+            Keybind::new("ctrl+u".to_string(), "Scroll up half a page".to_string()),
+            Keybind::new("ctrl+d".to_string(), "Scroll down half a page".to_string()),
+            Keybind::new("page up".to_string(), "Scroll up a page".to_string()),
+            Keybind::new("page down".to_string(), "Scroll down a page".to_string()),
+            Keybind::new("h".to_string(), "Select previous date".to_string()),
+            Keybind::new("←".to_string(), "Select previous date".to_string()),
+            Keybind::new("l".to_string(), "Select next date".to_string()),
+            Keybind::new("→".to_string(), "Select next date".to_string()),
+        ]
+    }
+
+    #[must_use]
+    pub fn get_keybinds_hint_text() -> Vec<Span<'static>> {
+        vec![
+            " Use ".into(),
+            "a".blue().bold(),
+            " to track a new project, ".into(),
+            "e".blue().bold(),
+            " to edit time, ".into(),
+            "d".blue().bold(),
+            " to delete, ".into(),
+            "space".blue().bold(),
+            " to toggle tracking".into(),
+        ]
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -405,7 +463,7 @@ enum CopyContent {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use crate::core::clipboard::mock_clipboard::MockClipboard;
     use crate::db::db_test_context::DBTestContext;
@@ -468,6 +526,36 @@ mod test {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    #[test]
+    fn get_keybinds() {
+        let keybinds: Vec<String> = SessionTable::get_keybinds()
+            .iter()
+            .map(|key| format!("{key}"))
+            .collect();
+
+        let joined = keybinds.join(" ");
+
+        assert_eq!(
+            joined,
+            "a - Track a new project e - Edit tracked time space - Toggle time tracking d - Delete session delete - Delete session D - Force delete session c - Copy f - Change time format k - Select previous row ↑ - Select previous row j - Select next row ↓ - Select next row g - Select first row home - Select first row G - Select last row end - Select last row ctrl+u - Scroll up half a page ctrl+d - Scroll down half a page page up - Scroll up a page page down - Scroll down a page h - Select previous date ← - Select previous date l - Select next date → - Select next date"
+        );
+    }
+
+    #[test]
+    fn get_keybinds_hint_text() {
+        let keybinds: Vec<String> = SessionTable::get_keybinds_hint_text()
+            .iter()
+            .map(|key| format!("{key}"))
+            .collect();
+
+        let joined = keybinds.join(" ");
+
+        assert_eq!(
+            joined,
+            " Use  a  to track a new project,  e  to edit time,  d  to delete,  space  to toggle tracking"
+        );
+    }
+
     mod render {
         use super::*;
         use crate::tui::render_test_util::RenderTestUtil;
@@ -491,12 +579,12 @@ mod test {
             table.render(area, &mut buf, true);
 
             let expected = vec![
-                "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┏ [2] Friday, 20 September 2024 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                                                                     00:15┃",
                 "┃Project A                                                                                              01:31┃",
                 "┃                                                                                                            ┃",
                 "┃Total                                                                                                  01:46┃",
-                "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
+                "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
             ];
 
             RenderTestUtil::assert_eq(expected, &buf);
@@ -521,12 +609,12 @@ mod test {
             table.render(area, &mut buf, true);
 
             let expected = vec![
-                "┏ [2] Today━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┏ [2] Today ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃                                                                                                            ┃",
                 "┃                                                                                                            ┃",
                 "┃                                                                                                            ┃",
                 "┃Total                                                                                                  00:00┃",
-                "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
+                "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
             ];
 
             RenderTestUtil::assert_eq(expected, &buf);
@@ -553,7 +641,7 @@ mod test {
             table.render(area, &mut buf, true);
 
             let expected = vec![
-                "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┏ [2] Friday, 20 September 2024 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                                                                     00:15┃",
                 "┃Proje┌──────────────────────────────────────────────────────────────────────────────────────────── Esc ┐1:31┃",
                 "┃     │                                                                                                 │    ┃",
@@ -562,7 +650,7 @@ mod test {
                 "┃     │One more - With some other text                                                                  │    ┃",
                 "┃     │                                                                                                 │    ┃",
                 "┃Total└─────────────────────────────────────────────────────────────────────────────────────────────────┘1:46┃",
-                "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
+                "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
             ];
 
             RenderTestUtil::assert_eq(expected, &buf);
@@ -589,7 +677,7 @@ mod test {
             table.render(area, &mut buf, true);
 
             let expected = vec![
-                "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┏ [2] Friday, 20 September 2024 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                                                                     00:15┃",
                 "┃Project A               ┌───────────────────────────────────────────────────── Esc ┐                   01:31┃",
                 "┃                        │You are about to reset the session                        │                        ┃",
@@ -598,7 +686,7 @@ mod test {
                 "┃                        │                                                          │                        ┃",
                 "┃                        └────────────────y to delete, n to cancel ─────────────────┘                        ┃",
                 "┃Total                                                                                                  01:46┃",
-                "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
+                "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
             ];
 
             RenderTestUtil::assert_eq(expected, &buf);
@@ -625,7 +713,7 @@ mod test {
             table.render(area, &mut buf, true);
 
             let expected = vec![
-                "┏ [2] Friday, 20 September 2024━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+                "┏ [2] Friday, 20 September 2024 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
                 "┃Another project With a description                                                                     00:15┃",
                 "┃Project A                                                                                              01:31┃",
                 "┃                        ┌───────────────────────────────────────────────────── Esc ┐                        ┃",
@@ -635,7 +723,7 @@ mod test {
                 "┃                        └──────────────────────────────────────────────────────────┘                        ┃",
                 "┃                                                                                                            ┃",
                 "┃Total                                                                                                  01:46┃",
-                "┗━━━━━━━━ Use g/G to go top/bottom, space to toggle tracking, s to track a new project, d to delete ━━━━━━━━━┛",
+                "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
             ];
 
             RenderTestUtil::assert_eq(expected, &buf);
@@ -824,7 +912,7 @@ mod test {
 
             // Select the second row
             table.handle_key_event(key(KeyCode::Down)).unwrap();
-            // Start the second session (projcet 1)
+            // Start the second session (project 1)
             table.handle_key_event(key(KeyCode::Char(' '))).unwrap();
 
             // Assert that project 1 has been started and that project 2 has been stopped

@@ -2,23 +2,25 @@ use crate::core::app_error::AppError;
 use crate::db::project_repository::ProjectRepository;
 use crate::model::project::Project;
 use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
+use crate::tui::components::keybinds_dialog::Keybind;
 use crate::tui::components::project_form::{ProjectForm, ProjectFormEvent};
 use crate::tui::terminal_user_interface::KeyEventResult;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::symbols::border;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Row, StatefulWidget, Table, TableState, Widget};
 use rusqlite::Connection;
 
 pub struct ProjectTable<'a> {
     projects: Vec<Project>,
-    state: TableState,
+    table_state: TableState,
     connection: &'a Connection,
     is_showing_deletion_alert_dialog: bool,
     project_form: Option<ProjectForm<'a>>,
+    table_height: u16,
 }
 
 impl<'a> ProjectTable<'a> {
@@ -38,10 +40,11 @@ impl<'a> ProjectTable<'a> {
 
         Ok(Self {
             projects,
-            state: TableState::default(),
+            table_state: TableState::default(),
             connection,
             is_showing_deletion_alert_dialog: false,
             project_form: None,
+            table_height: 0,
         })
     }
 
@@ -77,7 +80,9 @@ impl<'a> ProjectTable<'a> {
             .block(table_block)
             .row_highlight_style(Style::new().reversed());
 
-        StatefulWidget::render(table, area, buf, &mut self.state);
+        StatefulWidget::render(table, area, buf, &mut self.table_state);
+
+        self.table_height = area.height - 2; // Subtract block borders
 
         if let Some(form) = &mut self.project_form {
             form.render(area, buf);
@@ -132,17 +137,23 @@ impl<'a> ProjectTable<'a> {
         }
 
         let has_selected_project = self.get_selected_project().is_some();
+        let half_page = self.table_height.saturating_sub(1) / 2;
+        let ctrl_key_is_held = key_event.modifiers.contains(KeyModifiers::CONTROL);
 
         let mut did_match = true;
 
         match key_event.code {
-            KeyCode::Char('j') | KeyCode::Down => self.state.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => self.state.select_previous(),
-            KeyCode::Char('g') | KeyCode::Home => self.state.select_first(),
-            KeyCode::Char('G') | KeyCode::End => self.state.select_last(),
+            KeyCode::Char('j') | KeyCode::Down => self.table_state.select_next(),
+            KeyCode::Char('k') | KeyCode::Up => self.table_state.select_previous(),
+            KeyCode::Char('u') if ctrl_key_is_held => self.table_state.scroll_up_by(half_page),
+            KeyCode::Char('d') if ctrl_key_is_held => self.table_state.scroll_down_by(half_page),
+            KeyCode::PageUp => self.table_state.scroll_up_by(self.table_height),
+            KeyCode::PageDown => self.table_state.scroll_down_by(self.table_height),
+            KeyCode::Char('g') | KeyCode::Home => self.table_state.select_first(),
+            KeyCode::Char('G') | KeyCode::End => self.table_state.select_last(),
             KeyCode::Char('a') => self.project_form = Some(ProjectForm::new(None, None, None)),
             KeyCode::Char('e') if has_selected_project => self.edit_project()?,
-            KeyCode::Char('d') if has_selected_project => {
+            KeyCode::Char('d') | KeyCode::Delete if has_selected_project => {
                 self.is_showing_deletion_alert_dialog = true;
             }
             KeyCode::Char('D') if has_selected_project => self.delete_project()?,
@@ -223,9 +234,45 @@ impl<'a> ProjectTable<'a> {
     }
 
     fn get_selected_project(&self) -> Option<&Project> {
-        let selected_index = self.state.selected()?;
+        let selected_index = self.table_state.selected()?;
 
         self.projects.get(selected_index)
+    }
+
+    #[must_use]
+    pub fn get_keybinds() -> Vec<Keybind> {
+        vec![
+            Keybind::new("a".to_string(), "Add a new project".to_string()),
+            Keybind::new("e".to_string(), "Edit project".to_string()),
+            Keybind::new("d".to_string(), "Delete project".to_string()),
+            Keybind::new("delete".to_string(), "Delete project".to_string()),
+            Keybind::new("D".to_string(), "Force delete project".to_string()),
+            Keybind::new("k".to_string(), "Select previous row".to_string()),
+            Keybind::new("↑".to_string(), "Select previous row".to_string()),
+            Keybind::new("j".to_string(), "Select next row".to_string()),
+            Keybind::new("↓".to_string(), "Select next row".to_string()),
+            Keybind::new("g".to_string(), "Select first row".to_string()),
+            Keybind::new("home".to_string(), "Select first row".to_string()),
+            Keybind::new("G".to_string(), "Select last row".to_string()),
+            Keybind::new("end".to_string(), "Select last row".to_string()),
+            Keybind::new("ctrl+u".to_string(), "Scroll up half a page".to_string()),
+            Keybind::new("ctrl+d".to_string(), "Scroll down half a page".to_string()),
+            Keybind::new("page up".to_string(), "Scroll up a page".to_string()),
+            Keybind::new("page down".to_string(), "Scroll down a page".to_string()),
+        ]
+    }
+
+    #[must_use]
+    pub fn get_keybinds_hint_text() -> Vec<Span<'static>> {
+        vec![
+            " Use ".into(),
+            "a".blue().bold(),
+            " to add, ".into(),
+            "e".blue().bold(),
+            " to edit, ".into(),
+            "d".blue().bold(),
+            " to delete".into(),
+        ]
     }
 }
 
@@ -256,6 +303,33 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    #[test]
+    fn get_keybinds() {
+        let keybinds: Vec<String> = ProjectTable::get_keybinds()
+            .iter()
+            .map(|key| format!("{key}"))
+            .collect();
+
+        let joined = keybinds.join(" ");
+
+        assert_eq!(
+            joined,
+            "a - Add a new project e - Edit project d - Delete project delete - Delete project D - Force delete project k - Select previous row ↑ - Select previous row j - Select next row ↓ - Select next row g - Select first row home - Select first row G - Select last row end - Select last row ctrl+u - Scroll up half a page ctrl+d - Scroll down half a page page up - Scroll up a page page down - Scroll down a page"
+        );
+    }
+
+    #[test]
+    fn get_keybinds_hint_text() {
+        let keybinds: Vec<String> = ProjectTable::get_keybinds_hint_text()
+            .iter()
+            .map(|key| format!("{key}"))
+            .collect();
+
+        let joined = keybinds.join(" ");
+
+        assert_eq!(joined, " Use  a  to add,  e  to edit,  d  to delete");
+    }
+
     mod render {
         use super::*;
         use crate::tui::render_test_util::RenderTestUtil;
@@ -274,7 +348,7 @@ mod tests {
                 "┃Another project With a description                        ┃",
                 "┃One more        With some other text                      ┃",
                 "┃Project A                                                 ┃",
-                "┗━━━━ Use g/G to go top/bottom, a to add a new project ━━━━┛",
+                "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
             ];
 
             RenderTestUtil::assert_eq(expected, &buf);
@@ -307,7 +381,7 @@ mod tests {
                 "┃   └─────────────────────────────────────────────────────────────┘  ┃",
                 "┃                                                                    ┃",
                 "┃                                                                    ┃",
-                "┗━━━━━━━━━ Use g/G to go top/bottom, a to add a new project ━━━━━━━━━┛",
+                "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
             ];
 
             RenderTestUtil::assert_eq(expected, &buf);
@@ -337,7 +411,7 @@ mod tests {
                 "┃    └────────────────y to delete, n to cancel ─────────────────┘    ┃",
                 "┃                                                                    ┃",
                 "┃                                                                    ┃",
-                "┗━━━━━━━━━ Use g/G to go top/bottom, a to add a new project ━━━━━━━━━┛",
+                "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
             ];
 
             RenderTestUtil::assert_eq(expected, &buf);
@@ -363,7 +437,7 @@ mod tests {
             assert_eq!(event, KeyEventResult::Consumed);
             assert!(table.is_showing_deletion_alert_dialog);
 
-            // Verify that the dialog can be closed, and that it does not trigger deletion
+            // Verify that the dialog can be closed and that it does not trigger deletion
             let event = table.handle_key_event(key(KeyCode::Char('n'))).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
             assert!(!table.is_showing_deletion_alert_dialog);
@@ -479,7 +553,7 @@ mod tests {
             let second = table.projects.get(1).unwrap();
             let third = table.projects.get(2).unwrap();
 
-            // Verify that both fields have been modifeid and that sorting has changed
+            // Verify that both fields have been modified and that sorting has changed
             assert_eq!(first.name, "One more");
             assert_eq!(first.description, Some("With some other text".to_string()));
             assert_eq!(second.name, "Project A",);

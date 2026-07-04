@@ -51,9 +51,9 @@ impl Database {
     }
 
     fn database_path() -> Result<PathBuf, DatabaseError> {
-        let project_dirs = Paths::project_dir().ok_or(DatabaseError::MissingDataDirectory)?;
+        let data_dir = Paths::data_dir().ok_or(DatabaseError::MissingDataDirectory)?;
 
-        Ok(project_dirs.data_dir().join("tlog.sqlite3"))
+        Ok(data_dir.join("tlog.sqlite3"))
     }
 
     /// Initializes the database schema required by the application.

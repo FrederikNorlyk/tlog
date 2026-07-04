@@ -126,7 +126,7 @@ pub enum ProjectCommandError {
     #[error("SQLITE error: {0}")]
     SQLite(#[from] rusqlite::Error),
     #[error("Application error: {0}")]
-    AppErroor(#[from] AppError),
+    AppError(#[from] AppError),
     #[error("Project with id {project_id} was not found")]
     ProjectNotFound { project_id: i32 },
 }

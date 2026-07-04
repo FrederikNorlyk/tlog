@@ -56,9 +56,8 @@ impl Config {
     }
 
     fn file_path() -> Result<PathBuf, ConfigError> {
-        let project_dirs = Paths::project_dir().ok_or(ConfigError::MissingDataDirectory)?;
-        let dir = project_dirs.config_dir();
-        let path = dir.join("tlog.toml");
+        let config_dir = Paths::config_dir().ok_or(ConfigError::MissingConfigDirectory)?;
+        let path = config_dir.join("tlog.toml");
 
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -90,6 +89,8 @@ impl ConfigMetadata {
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    #[error("Could not determine application data config")]
+    MissingConfigDirectory,
     #[error("Could not determine application data directory")]
     MissingDataDirectory,
     #[error("I/O error: {0}")]
