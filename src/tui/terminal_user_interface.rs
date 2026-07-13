@@ -58,8 +58,7 @@ impl<'a> TerminalUserInterface<'a> {
 
     /// Launches the terminal user interface.
     ///
-    /// This method repeatedly renders the UI and waits for keyboard input. It exits
-    /// successfully after a key press is received.
+    /// This method repeatedly renders the UI and waits for keyboard input.
     ///
     /// # Errors
     ///
