@@ -3,7 +3,7 @@ use crate::core::clipboard::clipboard_backend::ClipboardBackend;
 use crate::core::config::Config;
 use crate::core::format::Format;
 use crate::core::time_format::TimeFormat;
-use crate::core::tracking::Tracking;
+use crate::core::tracking::{TimeAdjustmentOperation, Tracking};
 use crate::model::session::Session;
 use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
 use crate::tui::components::keybinds_dialog::Keybind;
@@ -54,7 +54,7 @@ impl<'a> SessionTable<'a> {
     ) -> Result<Self, AppError> {
         let mut table_state = TableState::default();
         let tracking = Tracking::new(connection);
-        let sessions = tracking.list_all_sessions(date)?;
+        let sessions = tracking.list_all_sessions(date, None)?;
 
         if !sessions.is_empty() {
             table_state.select_next();
@@ -186,7 +186,7 @@ impl<'a> SessionTable<'a> {
                     let tracking = Tracking::new(self.connection);
 
                     tracking.start(project_id)?;
-                    self.sessions = tracking.list_all_sessions(self.date)?;
+                    self.sessions = tracking.list_all_sessions(self.date, None)?;
                     self.project_select = None;
                 }
                 ProjectSelectEvent::Ignore => {}
@@ -262,6 +262,16 @@ impl<'a> SessionTable<'a> {
             }
             KeyCode::Char('D') if has_selected_session => self.reset_session()?,
             KeyCode::Char(' ') if has_selected_session => self.toggle_session()?,
+            KeyCode::Char('a') if ctrl_key_is_held && has_selected_session => {
+                self.adjust_selected_session_by_fifteen_minutes(
+                    TimeAdjustmentOperation::Increment,
+                )?;
+            }
+            KeyCode::Char('x') if ctrl_key_is_held && has_selected_session => {
+                self.adjust_selected_session_by_fifteen_minutes(
+                    TimeAdjustmentOperation::Decrement,
+                )?;
+            }
             KeyCode::Char('a') => {
                 self.project_select = Some(ProjectSelect::new(self.connection, self.date)?);
             }
@@ -294,7 +304,7 @@ impl<'a> SessionTable<'a> {
             .expect("Could not shift date");
 
         let tracking = Tracking::new(self.connection);
-        self.sessions = tracking.list_all_sessions(self.date)?;
+        self.sessions = tracking.list_all_sessions(self.date, None)?;
 
         Ok(())
     }
@@ -308,7 +318,24 @@ impl<'a> SessionTable<'a> {
 
         let tracking = Tracking::new(self.connection);
         tracking.toggle(session.project.id)?;
-        self.sessions = tracking.list_all_sessions(self.date)?;
+        self.sessions = tracking.list_all_sessions(self.date, None)?;
+
+        Ok(())
+    }
+
+    fn adjust_selected_session_by_fifteen_minutes(
+        &mut self,
+        operation: TimeAdjustmentOperation,
+    ) -> Result<(), AppError> {
+        let Some(session) = self.get_selected_session() else {
+            return Err(AppError::InvalidState {
+                message: "No selected session",
+            });
+        };
+
+        let tracking = Tracking::new(self.connection);
+        tracking.adjust_by_fifteen_minutes(session.project.id, self.date, operation)?;
+        self.sessions = tracking.list_all_sessions(self.date, None)?;
 
         Ok(())
     }
@@ -322,7 +349,7 @@ impl<'a> SessionTable<'a> {
 
         let tracking = Tracking::new(self.connection);
         tracking.reset(session.project.id, self.date)?;
-        self.sessions = tracking.list_all_sessions(self.date)?;
+        self.sessions = tracking.list_all_sessions(self.date, None)?;
 
         Ok(())
     }
@@ -402,7 +429,7 @@ impl<'a> SessionTable<'a> {
         let tracking = Tracking::new(self.connection);
 
         tracking.set(session.project.id, self.date, total_seconds)?;
-        self.sessions = tracking.list_all_sessions(self.date)?;
+        self.sessions = tracking.list_all_sessions(self.date, None)?;
 
         Ok(())
     }
@@ -414,6 +441,14 @@ impl<'a> SessionTable<'a> {
             Keybind::new("e".to_string(), "Edit tracked time".to_string()),
             Keybind::new("space".to_string(), "Toggle time tracking".to_string()),
             Keybind::new("d".to_string(), "Delete session".to_string()),
+            Keybind::new(
+                "ctrl+a".to_string(),
+                "Increment session by 15 min".to_string(),
+            ),
+            Keybind::new(
+                "ctrl+x".to_string(),
+                "Decrement session by 15 min".to_string(),
+            ),
             Keybind::new("delete".to_string(), "Delete session".to_string()),
             Keybind::new("D".to_string(), "Force delete session".to_string()),
             Keybind::new("c".to_string(), "Copy".to_string()),

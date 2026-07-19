@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let time_format = Config::get()?.time_format();
 
             tracking
-                .list_all_sessions(query_date)?
+                .list_all_sessions(query_date, None)?
                 .iter()
                 .for_each(|session| {
                     total += session.total_seconds;

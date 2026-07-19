@@ -102,7 +102,7 @@ impl<'a> Tracking<'a> {
 
     /// Reset time tracking on the given project on the given date.
     ///
-    /// It does so by remove any events and manual sessions on the given project on the given date.
+    /// It does so by removing any events and manual sessions on the given project on the given date.
     ///
     /// # Errors
     ///
@@ -113,6 +113,46 @@ impl<'a> Tracking<'a> {
 
         let manual_session_repository = ManualSessionRepository::new(self.connection);
         manual_session_repository.delete(project_id, date)?;
+
+        Ok(())
+    }
+
+    /// Adjusts the recorded total time for a specific project's sessions to the nearest rounded
+    /// time (15-minute intervals)
+    ///
+    /// # Errors
+    ///
+    /// This method will return a `rusqlite::Error` in cases such as:
+    /// * Failure to retrieve sessions from the database.
+    /// * Failure to delete events from the `EventRepository`.
+    /// * Failure to upsert the adjusted session in the `ManualSessionRepository`.
+    pub fn adjust_by_fifteen_minutes(
+        &self,
+        project_id: i32,
+        date: Date,
+        operation: TimeAdjustmentOperation,
+    ) -> rusqlite::Result<()> {
+        const FIFTEEN_MINUTES_SECONDS: i64 = 15 * 60;
+
+        let sessions = self.list_all_sessions(date, Some(project_id))?;
+        let total_seconds = sessions.first().map_or(0, |s| s.total_seconds);
+
+        let rounded_seconds = match operation {
+            TimeAdjustmentOperation::Increment => {
+                ((total_seconds / FIFTEEN_MINUTES_SECONDS) + 1) * FIFTEEN_MINUTES_SECONDS
+            }
+            TimeAdjustmentOperation::Decrement => {
+                ((total_seconds - 1) / FIFTEEN_MINUTES_SECONDS) * FIFTEEN_MINUTES_SECONDS
+            }
+        }
+        .max(0);
+
+        let event_repository = EventRepository::new(self.connection);
+        let manual_session_repository = ManualSessionRepository::new(self.connection);
+
+        event_repository.delete_all_in(project_id, date)?;
+
+        manual_session_repository.upsert(project_id, date, rounded_seconds)?;
 
         Ok(())
     }
@@ -128,7 +168,11 @@ impl<'a> Tracking<'a> {
     /// # Errors
     ///
     /// Returns a database error if any query or project lookup fails.
-    pub fn list_all_sessions(&self, date: Date) -> rusqlite::Result<Vec<Session>> {
+    pub fn list_all_sessions(
+        &self,
+        date: Date,
+        project_id: Option<i32>,
+    ) -> rusqlite::Result<Vec<Session>> {
         struct PrimitiveSession {
             project_id: i32,
             total_seconds: i64,
@@ -141,7 +185,7 @@ impl<'a> Tracking<'a> {
 
         let mut project_to_primitive_sessions = HashMap::new();
 
-        manual_sessions_repository.for_each(date, |manual_session| {
+        manual_sessions_repository.for_each(date, project_id, |manual_session| {
             project_to_primitive_sessions.insert(
                 manual_session.project_id,
                 PrimitiveSession {
@@ -154,7 +198,7 @@ impl<'a> Tracking<'a> {
 
         let mut project_to_events: HashMap<i32, Vec<Event>> = HashMap::new();
 
-        event_repository.for_each(date, |event| {
+        event_repository.for_each(date, project_id, |event| {
             project_to_events
                 .entry(event.project_id)
                 .or_default()
@@ -223,6 +267,11 @@ impl<'a> Tracking<'a> {
 
         Ok(sessions)
     }
+}
+
+pub enum TimeAdjustmentOperation {
+    Increment,
+    Decrement,
 }
 
 #[derive(Debug, Error)]
@@ -420,9 +469,9 @@ mod tests {
             event_repository.insert(2, Stop, timestamp)?;
 
             // -------------------------
-            // Assert event based sessions duration
+            // Assert event-based sessions duration
             // -------------------------
-            let sessions = tracking.list_all_sessions(date)?;
+            let sessions = tracking.list_all_sessions(date, None)?;
             assert_eq!(sessions.len(), 2);
 
             let session = sessions.first().unwrap();
@@ -439,9 +488,9 @@ mod tests {
             tracking.set(1, date, 200)?;
 
             // -------------------------
-            // Verify that project 1 is 200 seconds, and project 2 is still event based
+            // Verify that project 1 is 200 seconds, and project 2 is still event-based
             // -------------------------
-            let sessions = tracking.list_all_sessions(date)?;
+            let sessions = tracking.list_all_sessions(date, None)?;
             assert_eq!(sessions.len(), 2);
 
             let session = sessions.first().unwrap();
@@ -477,11 +526,12 @@ mod tests {
             timestamp += 10;
             event_repository.insert(1, Stop, timestamp)?;
             timestamp += 10;
-            // Other project's events should not be deleted
+            // Other projects' events should not be deleted
             event_repository.insert(2, Start, timestamp)?;
 
             let next_day =
                 Date::from_calendar_date(2026, time::Month::June, 3).expect("valid date");
+
             let next_day_timestamp = PrimitiveDateTime::new(next_day, time)
                 .assume_utc()
                 .unix_timestamp();
@@ -568,8 +618,8 @@ mod tests {
             // -------------------------
             // Execute
             // -------------------------
-            let sessions = tracking.list_all_sessions(date)?;
-            let today_sessions = tracking.list_all_sessions(today)?;
+            let sessions = tracking.list_all_sessions(date, None)?;
+            let today_sessions = tracking.list_all_sessions(today, None)?;
 
             // -------------------------
             // Assertions
@@ -641,7 +691,7 @@ mod tests {
             // -------------------------
             // Execute
             // -------------------------
-            let today_sessions = tracking.list_all_sessions(today)?;
+            let today_sessions = tracking.list_all_sessions(today, None)?;
 
             // -------------------------
             // Assertions

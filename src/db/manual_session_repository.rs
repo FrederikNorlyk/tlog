@@ -59,19 +59,22 @@ impl<'a> ManualSessionRepository<'a> {
     ///
     /// Returns an error if preparing or executing the query fails, or if a returned
     /// row cannot be converted into a [`ManualSession`].
-    pub fn for_each<F>(&self, date: Date, mut consumer: F) -> Result<()>
+    pub fn for_each<F>(&self, date: Date, project_id: Option<i32>, mut consumer: F) -> Result<()>
     where
         F: FnMut(ManualSession),
     {
         let mut statement = self.connection.prepare(
             "SELECT project_id, total_seconds
             FROM manual_session
-            WHERE date = :date",
+            WHERE
+                date = :date AND
+                (:project_id IS NULL OR project_id = :project_id)",
         )?;
 
         let rows = statement.query_map(
             named_params! {
-                ":date": date.to_string()
+                ":date": date.to_string(),
+                ":project_id": project_id
             },
             |row| {
                 Ok(ManualSession {
