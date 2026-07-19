@@ -4,11 +4,15 @@ use time::OffsetDateTime;
 use tlog::cli::commands::{Cli, Command};
 use tlog::cli::config_command::ConfigCommand;
 use tlog::cli::project_command::handle_project_command;
+use tlog::core::clipboard::system_clipboard::SystemClipboard;
+use tlog::core::config::Config;
+use tlog::core::format::Format;
+use tlog::core::time_format::TimeFormat;
 use tlog::core::tracking::Tracking;
 use tlog::db::database::Database;
 use tlog::db::project_repository::ProjectRepository;
+use tlog::model::session::Session;
 use tlog::tui::terminal_user_interface::TerminalUserInterface;
-use tlog::util::format_util::FormatUtil;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let database = Database::new()?;
@@ -17,15 +21,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     let Some(command) = cli.command else {
-        let tui = TerminalUserInterface;
-        ratatui::run(|terminal| tui.launch(terminal))?;
+        let clipboard = Box::new(SystemClipboard::new()?);
+        let mut tui = TerminalUserInterface::new(database.connection(), clipboard)?;
+
+        ratatui::run(|terminal| tui.run(terminal))?;
+
         return Ok(());
     };
 
     match command {
         Command::Project { command } => {
+            let mut stdout = std::io::stdout();
             let project_repository = ProjectRepository::new(database.connection());
-            handle_project_command(command, &project_repository)?;
+            handle_project_command(command, &project_repository, &mut stdout)?;
         }
         Command::Start { project_id } => {
             let tracking = Tracking::new(database.connection());
@@ -56,30 +64,56 @@ fn main() -> Result<(), Box<dyn Error>> {
             let tracking = Tracking::new(database.connection());
             let mut total = 0;
             let query_date = date.unwrap_or_else(|| OffsetDateTime::now_utc().date());
+            let time_format = Config::get()?.time_format();
 
             tracking
                 .list_all_sessions(query_date)?
                 .iter()
                 .for_each(|session| {
                     total += session.total_seconds;
-                    println!("{session}");
+                    print_session(session, time_format);
                 });
 
-            let (hours, minutes, seconds) = FormatUtil::seconds_to_hms(total);
+            let duration = Format::seconds_to_duration(total, time_format);
 
-            println!("{BOLD}{hours:02}:{minutes:02}:{seconds:02}       Total{RESET}");
+            println!("{BOLD}{duration:10}      Total{RESET}");
         }
         Command::Config { command } => match command {
             ConfigCommand::Where => {
-                let path = database
+                let database_path = database
                     .connection()
                     .path()
                     .ok_or_else(|| std::io::Error::other("Database connection has no path"))?;
 
-                println!("{path}");
+                println!("Database: {database_path}");
+
+                let config_path = Config::get_or_create_file_path()?;
+                println!("Config: {}", config_path.display());
+            }
+            ConfigCommand::TimeFormat { value } => {
+                if let Some(time_format) = value {
+                    Config::set_time_format(time_format)?;
+                } else {
+                    println!("Time format: {:?}", Config::get()?.time_format());
+                }
             }
         },
     }
 
     Ok(())
+}
+
+fn print_session(session: &Session, time_format: TimeFormat) {
+    const LIGHT_GRAY: &str = "\x1b[90m";
+    const BOLD: &str = "\x1b[1m";
+    const RESET: &str = "\x1b[0m";
+
+    let project = &session.project;
+    let mut duration = Format::seconds_to_duration(session.total_seconds, time_format);
+
+    if session.is_started {
+        duration.push('*');
+    }
+
+    println!("{BOLD}{duration:10}{RESET}  {LIGHT_GRAY}{project}{RESET}");
 }

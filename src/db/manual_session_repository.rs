@@ -1,6 +1,6 @@
 use crate::db::database::Repository;
 use crate::model::manual_session::ManualSession;
-use rusqlite::{named_params, Connection, Result};
+use rusqlite::{Connection, Result, named_params};
 use time::Date;
 
 pub struct ManualSessionRepository<'a> {
@@ -117,8 +117,8 @@ impl<'a> Repository<'a> for ManualSessionRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::db_test_context::DBTestContext;
     use crate::db::project_repository::ProjectRepository;
-    use crate::db::test_utils::DBTestContext;
     use time::Month;
 
     fn initialize_context() -> Result<DBTestContext> {

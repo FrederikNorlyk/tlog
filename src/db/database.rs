@@ -1,10 +1,10 @@
+use crate::core::paths::Paths;
 use crate::db::event_repository::EventRepository;
 use crate::db::manual_session_repository::ManualSessionRepository;
 use crate::db::project_repository::ProjectRepository;
-use directories::ProjectDirs;
 use rusqlite::Connection;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 use thiserror::Error;
 
 pub struct Database {
@@ -51,10 +51,9 @@ impl Database {
     }
 
     fn database_path() -> Result<PathBuf, DatabaseError> {
-        let project_dirs = ProjectDirs::from("com", "FrederikNorlyk", "tlog")
-            .ok_or(DatabaseError::MissingDataDirectory)?;
+        let data_dir = Paths::data_dir().ok_or(DatabaseError::MissingDataDirectory)?;
 
-        Ok(project_dirs.data_dir().join("tlog.sqlite3"))
+        Ok(data_dir.join("tlog.sqlite3"))
     }
 
     /// Initializes the database schema required by the application.

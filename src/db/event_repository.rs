@@ -1,6 +1,6 @@
 use crate::db::database::Repository;
 use crate::model::event::{Event, EventType};
-use rusqlite::{named_params, Connection, OptionalExtension, Result};
+use rusqlite::{Connection, OptionalExtension, Result, named_params};
 use time::Date;
 
 pub struct EventRepository<'a> {
@@ -217,8 +217,8 @@ impl<'a> Repository<'a> for EventRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::db_test_context::DBTestContext;
     use crate::db::project_repository::ProjectRepository;
-    use crate::db::test_utils::DBTestContext;
     use crate::model::event::EventType::{Start, Stop};
     use std::error::Error;
     use time::{Month, PrimitiveDateTime, Time};

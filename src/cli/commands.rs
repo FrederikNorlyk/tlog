@@ -1,9 +1,9 @@
 use crate::cli::config_command::ConfigCommand;
 use crate::cli::project_command::ProjectCommand;
 use clap::{Parser, Subcommand};
+use time::Date;
 use time::error::Parse;
 use time::format_description::well_known::Iso8601;
-use time::Date;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -91,4 +91,3 @@ fn parse_duration(s: &str) -> Result<i64, String> {
 
     Ok(hours * 3600 + minutes * 60)
 }
-
