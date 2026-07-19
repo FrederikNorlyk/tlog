@@ -28,8 +28,6 @@ The default locations are as follows
 
 **Linux**
 
-TODO: These are probably wrong
-
 - `~/.local/share/tlog/` for data
 - `~/.config/tlog/` for configuration
 
