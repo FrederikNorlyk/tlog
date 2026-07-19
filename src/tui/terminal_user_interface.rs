@@ -1,5 +1,5 @@
 use crate::core::app_error::AppError;
-use crate::core::clipboard::system_clipboard::SystemClipboard;
+use crate::core::clipboard::clipboard_backend::ClipboardBackend;
 use crate::core::config::Config;
 use crate::tui::components::keybinds_dialog::{KeybindDialogEvent, KeybindsDialog};
 use crate::tui::components::project_table::ProjectTable;
@@ -36,18 +36,15 @@ impl<'a> TerminalUserInterface<'a> {
     /// # Errors
     ///
     /// If `SQLite` fails to query sessions.
-    pub fn new(connection: &'a Connection) -> Result<Self, AppError> {
+    pub fn new(
+        connection: &'a Connection,
+        clipboard: Box<dyn ClipboardBackend>,
+    ) -> Result<Self, AppError> {
         let time_format = Config::get()?.time_format();
         let date = OffsetDateTime::now_utc().date();
 
         Ok(Self {
-            session_table: SessionTable::new(
-                connection,
-                time_format,
-                date,
-                false,
-                Box::new(SystemClipboard::new()?),
-            )?,
+            session_table: SessionTable::new(connection, time_format, date, false, clipboard)?,
             project_table: ProjectTable::new(connection)?,
             exit: false,
             active_widget: ActiveWidget::SessionTable,
@@ -257,6 +254,7 @@ pub enum KeybindOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::clipboard::mock_clipboard::MockClipboard;
     use crate::db::db_test_context::DBTestContext;
     use crate::db::event_repository::EventRepository;
     use crate::db::manual_session_repository::ManualSessionRepository;
@@ -313,7 +311,11 @@ mod tests {
         #[test]
         fn keybind_dialog() {
             let context = DBTestContext::new().unwrap();
-            let mut tui = TerminalUserInterface::new(context.connection()).unwrap();
+            let mut tui = TerminalUserInterface::new(
+                context.connection(),
+                Box::new(MockClipboard::default()),
+            )
+            .unwrap();
 
             assert!(tui.keybind_dialog.is_none());
             tui.handle_key_event(key(KeyCode::Char('?'))).unwrap();
@@ -330,7 +332,11 @@ mod tests {
         #[test]
         fn active_widget() {
             let context = DBTestContext::new().unwrap();
-            let mut tui = TerminalUserInterface::new(context.connection()).unwrap();
+            let mut tui = TerminalUserInterface::new(
+                context.connection(),
+                Box::new(MockClipboard::default()),
+            )
+            .unwrap();
 
             assert_eq!(tui.active_widget, ActiveWidget::SessionTable);
             tui.handle_key_event(key(KeyCode::Char('1'))).unwrap();
@@ -342,7 +348,11 @@ mod tests {
         #[test]
         fn quit() {
             let context = DBTestContext::new().unwrap();
-            let mut tui = TerminalUserInterface::new(context.connection()).unwrap();
+            let mut tui = TerminalUserInterface::new(
+                context.connection(),
+                Box::new(MockClipboard::default()),
+            )
+            .unwrap();
 
             assert!(!tui.exit);
             tui.handle_key_event(key(KeyCode::Char('q'))).unwrap();
@@ -384,7 +394,11 @@ mod tests {
         #[test]
         fn keyboard_hint_text_for_session_table() {
             let context = DBTestContext::new().unwrap();
-            let mut tui = TerminalUserInterface::new(context.connection()).unwrap();
+            let mut tui = TerminalUserInterface::new(
+                context.connection(),
+                Box::new(MockClipboard::default()),
+            )
+            .unwrap();
             let hint_text = " Use a to track a new project, e to edit time, d to delete, space to toggle tracking, and ? to show keybinds";
 
             let expected = vec![
@@ -405,7 +419,11 @@ mod tests {
         #[test]
         fn keyboard_hint_text_for_project_table() {
             let context = DBTestContext::new().unwrap();
-            let mut tui = TerminalUserInterface::new(context.connection()).unwrap();
+            let mut tui = TerminalUserInterface::new(
+                context.connection(),
+                Box::new(MockClipboard::default()),
+            )
+            .unwrap();
             let hint_text = " Use a to add, e to edit, d to delete, and ? to show keybinds";
 
             // Select the project table
@@ -429,7 +447,11 @@ mod tests {
         #[test]
         fn with_data() {
             let context = initialize_context();
-            let mut tui = TerminalUserInterface::new(context.connection()).unwrap();
+            let mut tui = TerminalUserInterface::new(
+                context.connection(),
+                Box::new(MockClipboard::default()),
+            )
+            .unwrap();
             let hint_text = " Use a to track a new project, e to edit time, d to delete, space to toggle tracking, and ? to show keybinds";
 
             let expected = vec![
@@ -450,7 +472,11 @@ mod tests {
         #[test]
         fn copy_keybind_overlay() {
             let context = initialize_context();
-            let mut tui = TerminalUserInterface::new(context.connection()).unwrap();
+            let mut tui = TerminalUserInterface::new(
+                context.connection(),
+                Box::new(MockClipboard::default()),
+            )
+            .unwrap();
 
             tui.handle_key_event(key(KeyCode::Char('c'))).unwrap();
 

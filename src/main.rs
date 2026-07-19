@@ -4,6 +4,7 @@ use time::OffsetDateTime;
 use tlog::cli::commands::{Cli, Command};
 use tlog::cli::config_command::ConfigCommand;
 use tlog::cli::project_command::handle_project_command;
+use tlog::core::clipboard::system_clipboard::SystemClipboard;
 use tlog::core::config::Config;
 use tlog::core::format::Format;
 use tlog::core::time_format::TimeFormat;
@@ -20,8 +21,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     let Some(command) = cli.command else {
-        let mut tui = TerminalUserInterface::new(database.connection())?;
+        let clipboard = Box::new(SystemClipboard::new()?);
+        let mut tui = TerminalUserInterface::new(database.connection(), clipboard)?;
+
         ratatui::run(|terminal| tui.run(terminal))?;
+
         return Ok(());
     };
 
