@@ -9,6 +9,16 @@ tLog tracks time per project using a local SQLite database and provides both:
 - a command-line interface (CLI)
 - a terminal user interface (TUI)
 
+# Installation
+
+## Linux
+
+Run the installation script:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/FrederikNorlyk/tlog/main/scripts/linux-install.sh | bash
+```
+
 # Directory layout
 
 tLog uses the [directories::ProjectDirs](https://docs.rs/directories/latest/directories/struct.ProjectDirs.html) crate
@@ -39,7 +49,7 @@ TODO: These are probably wrong
 
 The configuration directory stores a single TOML file called `tlog.toml`, used to control application behavior.
 
-Example: 
+Example:
 
 ```toml
 time_format = "HoursMinutes"
