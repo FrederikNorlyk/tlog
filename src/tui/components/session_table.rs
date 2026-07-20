@@ -1,7 +1,6 @@
 use crate::core::app_error::AppError;
 use crate::core::clipboard::clipboard_backend::ClipboardBackend;
 use crate::core::config::Config;
-use crate::core::format::Format;
 use crate::core::time_format::TimeFormat;
 use crate::core::tracking::{TimeAdjustmentOperation, Tracking};
 use crate::model::session::Session;
@@ -91,7 +90,7 @@ impl<'a> SessionTable<'a> {
 
         for session in &self.sessions {
             let description = session.project.description.as_deref().unwrap_or_default();
-            let duration = Format::seconds_to_duration(session.total_seconds, self.time_format);
+            let duration = self.time_format.format(session.total_seconds);
             let name = session.project.name.as_str();
             let name_length = u16::try_from(name.len()).unwrap_or(u16::MAX);
 
@@ -114,7 +113,7 @@ impl<'a> SessionTable<'a> {
         let footer = Row::new(vec![
             Cell::from("Total").bold(),
             Cell::from(""),
-            Cell::from(Format::seconds_to_duration(total_seconds, self.time_format)).underlined(),
+            Cell::from(self.time_format.format(total_seconds)).underlined(),
         ]);
 
         let duration_width = match self.time_format {
@@ -375,10 +374,7 @@ impl<'a> SessionTable<'a> {
                     output.push(Self::escape_semicolon(description));
                 }
 
-                output.push(Format::seconds_to_duration(
-                    session.total_seconds,
-                    self.time_format,
-                ));
+                output.push(self.time_format.format(session.total_seconds));
 
                 output.join(";")
             }
@@ -390,9 +386,7 @@ impl<'a> SessionTable<'a> {
                     String::new()
                 }
             }
-            CopyContent::Time => {
-                Format::seconds_to_duration(session.total_seconds, self.time_format)
-            }
+            CopyContent::Time => self.time_format.format(session.total_seconds),
             CopyContent::Project => {
                 let mut project = Self::escape_semicolon(&session.project.name);
                 if let Some(description) = &session.project.description {
@@ -572,7 +566,7 @@ mod tests {
 
         assert_eq!(
             joined,
-            "a - Track a new project e - Edit tracked time space - Toggle time tracking d - Delete session delete - Delete session D - Force delete session c - Copy f - Change time format k - Select previous row ↑ - Select previous row j - Select next row ↓ - Select next row g - Select first row home - Select first row G - Select last row end - Select last row ctrl+u - Scroll up half a page ctrl+d - Scroll down half a page page up - Scroll up a page page down - Scroll down a page h - Select previous date ← - Select previous date l - Select next date → - Select next date"
+            "a - Track a new project e - Edit tracked time space - Toggle time tracking d - Delete session ctrl+a - Increment session by 15 min ctrl+x - Decrement session by 15 min delete - Delete session D - Force delete session c - Copy f - Change time format k - Select previous row ↑ - Select previous row j - Select next row ↓ - Select next row g - Select first row home - Select first row G - Select last row end - Select last row ctrl+u - Scroll up half a page ctrl+d - Scroll down half a page page up - Scroll up a page page down - Scroll down a page h - Select previous date ← - Select previous date l - Select next date → - Select next date"
         );
     }
 
