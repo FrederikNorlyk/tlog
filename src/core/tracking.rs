@@ -280,6 +280,7 @@ impl<'a> Tracking<'a> {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum TimeAdjustmentOperation {
     Increment,
     Decrement,
