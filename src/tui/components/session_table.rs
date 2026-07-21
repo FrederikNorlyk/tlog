@@ -976,6 +976,51 @@ mod tests {
         }
 
         #[test]
+        fn adjust_by_fifteen_minutes() {
+            let context = initialize_context();
+            let date = get_test_date();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                date,
+                false,
+                Box::new(MockClipboard::default()),
+            )
+            .unwrap();
+
+            // -------------------
+            // Increment by 15 min
+            // -------------------
+            let ctrl_e = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+            let event = table.handle_key_event(ctrl_e).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+
+            let tracking = Tracking::new(context.connection());
+            let sessions = tracking.list_all_sessions(date, Some(2)).unwrap();
+            let session = sessions.first().unwrap();
+
+            assert_eq!(session.project.id, 2);
+            assert!(!session.is_started);
+            assert_eq!(session.total_seconds, 1800);
+
+            // -------------------
+            // Decrement by 15 min
+            // -------------------
+            let ctrl_x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+            let event = table.handle_key_event(ctrl_x).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+
+            let tracking = Tracking::new(context.connection());
+            let sessions = tracking.list_all_sessions(date, Some(2)).unwrap();
+            let session = sessions.first().unwrap();
+
+            assert_eq!(session.project.id, 2);
+            assert!(!session.is_started);
+            assert_eq!(session.total_seconds, 900);
+        }
+
+        #[test]
         fn manual_session() {
             let context = initialize_context();
 

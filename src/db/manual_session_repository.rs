@@ -18,7 +18,7 @@ impl<'a> ManualSessionRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if `SQLite` fails to execute the insert statement, for
-    /// example because the database connection is invalid, the `manual_session` table
+    /// example, because the database connection is invalid, the `manual_session` table
     /// does not exist, or the provided data violates a database constraint.
     pub fn upsert(&self, project_id: i32, date: Date, total_seconds: i64) -> Result<()> {
         self.connection.execute(
@@ -41,7 +41,7 @@ impl<'a> ManualSessionRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if `SQLite` fails to execute the delete statement, for
-    /// example because the database connection is invalid or the `manual_session`
+    /// example, because the database connection is invalid or the `manual_session`
     /// table does not exist.
     pub fn delete(&self, project_id: i32, date: Date) -> Result<bool> {
         let deleted_count = self.connection.execute(

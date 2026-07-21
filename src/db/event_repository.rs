@@ -18,7 +18,7 @@ impl<'a> EventRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if `SQLite` fails to execute the insert statement, for
-    /// example because the database connection is invalid, the `event` table
+    /// example, because the database connection is invalid, the `event` table
     /// does not exist, or the provided data violates a database constraint.
     pub fn insert(&self, project_id: i32, event_type: EventType, timestamp: i64) -> Result<()> {
         self.connection.execute(
@@ -35,7 +35,7 @@ impl<'a> EventRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if `SQLite` fails to execute the delete statement, for
-    /// example because the database connection is invalid or the `event` table
+    /// example, because the database connection is invalid or the `event` table
     /// does not exist.
     pub fn delete(&self, id: i32) -> Result<bool> {
         let deleted_count = self.connection.execute(
@@ -51,7 +51,7 @@ impl<'a> EventRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if `SQLite` fails to execute the delete statement, for
-    /// example because the database connection is invalid or the `event` table
+    /// example, because the database connection is invalid or the `event` table
     /// does not exist.
     pub fn delete_all_in(&self, project_id: i32, date: Date) -> Result<bool> {
         let deleted_count = self.connection.execute(

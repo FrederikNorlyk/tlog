@@ -87,15 +87,13 @@ impl<'a> Tracking<'a> {
     /// # Errors
     ///
     /// Returns an error if `SQLite` fails to execute the queries.
-    pub fn set(&self, project_id: i32, date: Date, total_seconds: i64) -> rusqlite::Result<()> {
-        let event_repository = EventRepository::new(self.connection);
-        let manual_session_repository = ManualSessionRepository::new(self.connection);
-
-        event_repository.delete_all_in(project_id, date)?;
-
-        // TODO: If a start event exists on the project on a previous date we need to handle it
-
-        manual_session_repository.upsert(project_id, date, total_seconds)?;
+    pub fn set(
+        &self,
+        project_id: i32,
+        date: Date,
+        total_seconds: i64,
+    ) -> Result<(), TrackingError> {
+        self.overwrite_day(project_id, date, Some(total_seconds))?;
 
         Ok(())
     }
@@ -107,12 +105,8 @@ impl<'a> Tracking<'a> {
     /// # Errors
     ///
     /// Returns an error if deleting or creating events in the database fails.
-    pub fn reset(&self, project_id: i32, date: Date) -> rusqlite::Result<()> {
-        let event_repository = EventRepository::new(self.connection);
-        event_repository.delete_all_in(project_id, date)?;
-
-        let manual_session_repository = ManualSessionRepository::new(self.connection);
-        manual_session_repository.delete(project_id, date)?;
+    pub fn reset(&self, project_id: i32, date: Date) -> Result<(), TrackingError> {
+        self.overwrite_day(project_id, date, None)?;
 
         Ok(())
     }
@@ -131,7 +125,7 @@ impl<'a> Tracking<'a> {
         project_id: i32,
         date: Date,
         operation: TimeAdjustmentOperation,
-    ) -> rusqlite::Result<()> {
+    ) -> Result<(), TrackingError> {
         const FIFTEEN_MINUTES_SECONDS: i64 = 15 * 60;
 
         let sessions = self.list_all_sessions(date, Some(project_id))?;
@@ -147,12 +141,29 @@ impl<'a> Tracking<'a> {
         }
         .max(0);
 
+        self.overwrite_day(project_id, date, Some(rounded_seconds))?;
+
+        Ok(())
+    }
+
+    fn overwrite_day(
+        &self,
+        project_id: i32,
+        date: Date,
+        total_seconds: Option<i64>,
+    ) -> Result<(), TrackingError> {
         let event_repository = EventRepository::new(self.connection);
         let manual_session_repository = ManualSessionRepository::new(self.connection);
 
         event_repository.delete_all_in(project_id, date)?;
 
-        manual_session_repository.upsert(project_id, date, rounded_seconds)?;
+        // TODO: If a start event exists on the project on a previous date we need to handle it
+
+        if let Some(seconds) = total_seconds {
+            manual_session_repository.upsert(project_id, date, seconds)?;
+        } else {
+            manual_session_repository.delete(project_id, date)?;
+        }
 
         Ok(())
     }
@@ -560,6 +571,127 @@ mod tests {
 
             let sessions_after = context.collect_sessions()?;
             assert!(sessions_after.is_empty());
+
+            Ok(())
+        }
+    }
+
+    mod adjust_by_fifteen_minutes {
+        use super::*;
+        use crate::core::tracking::TimeAdjustmentOperation::Decrement;
+        use crate::core::tracking::TimeAdjustmentOperation::Increment;
+
+        #[test]
+        fn rounds_to_nearest_quarter() -> Result<(), Box<dyn Error>> {
+            let context = initialize_context()?;
+            let tracking = Tracking::new(context.connection());
+            let date = Date::from_calendar_date(2024, time::Month::April, 11)?;
+
+            tracking.set(1, date, 400)?;
+            tracking.set(2, date, 400)?;
+
+            // Rounding up to nearest quarter (900 seconds)
+            tracking.adjust_by_fifteen_minutes(1, date, Increment)?;
+            // Rounding down to nearest quarter (0 seconds)
+            tracking.adjust_by_fifteen_minutes(2, date, Decrement)?;
+
+            let sessions = tracking.list_all_sessions(date, None)?;
+            let first = sessions.first().unwrap();
+            let second = sessions.get(1).unwrap();
+
+            assert_eq!(first.project.id, 1);
+            assert!(!first.is_started);
+            assert_eq!(first.total_seconds, 900);
+
+            assert_eq!(second.project.id, 2);
+            assert!(!second.is_started);
+            assert_eq!(second.total_seconds, 0);
+
+            // Rounding up to 1,800 seconds
+            tracking.adjust_by_fifteen_minutes(1, date, Increment)?;
+            // Rounding up to 2,700 seconds
+            tracking.adjust_by_fifteen_minutes(1, date, Increment)?;
+            // Rounding down to 1,800 seconds
+            tracking.adjust_by_fifteen_minutes(1, date, Decrement)?;
+
+            let sessions = tracking.list_all_sessions(date, None)?;
+            let first = sessions.first().unwrap();
+            let second = sessions.get(1).unwrap();
+
+            assert_eq!(first.project.id, 1);
+            assert!(!first.is_started);
+            assert_eq!(first.total_seconds, 1800);
+
+            assert_eq!(second.project.id, 2);
+            assert!(!second.is_started);
+            assert_eq!(second.total_seconds, 0);
+
+            Ok(())
+        }
+
+        #[test]
+        fn zero_is_lowest_value() -> Result<(), Box<dyn Error>> {
+            let context = initialize_context()?;
+            let tracking = Tracking::new(context.connection());
+            let date = Date::from_calendar_date(2024, time::Month::April, 11)?;
+
+            tracking.set(1, date, 400)?;
+            // Rounding down to nearest quarter (0 seconds)
+            tracking.adjust_by_fifteen_minutes(1, date, Decrement)?;
+            // Rounding down again stays at 0 seconds.
+            tracking.adjust_by_fifteen_minutes(1, date, Decrement)?;
+
+            let sessions = tracking.list_all_sessions(date, None)?;
+            let session = sessions.first().unwrap();
+
+            assert_eq!(session.project.id, 1);
+            assert!(!session.is_started);
+            assert_eq!(session.total_seconds, 0);
+
+            Ok(())
+        }
+
+        #[test]
+        fn test_ongoing_sessions() -> Result<(), Box<dyn Error>> {
+            let context = initialize_context()?;
+            let tracking = Tracking::new(context.connection());
+            let date = OffsetDateTime::now_utc().date();
+
+            // Manual session (project 1)
+            tracking.set(1, date, 400)?;
+
+            // Ongoing session (project 2)
+            tracking.toggle(2)?;
+
+            // Adjusting a session does not modify the ongoing session
+            tracking.adjust_by_fifteen_minutes(1, date, Increment)?;
+
+            let sessions = tracking.list_all_sessions(date, None)?;
+            let first = sessions.first().unwrap();
+            let second = sessions.get(1).unwrap();
+
+            assert_eq!(first.project.id, 1);
+            assert!(!first.is_started);
+            assert_eq!(first.total_seconds, 900);
+
+            assert_eq!(second.project.id, 2);
+            assert!(second.is_started);
+            assert_eq!(second.total_seconds, 0);
+
+            // Adjusting an ongoing session stops it.
+            tracking.adjust_by_fifteen_minutes(2, date, Increment)?;
+
+            let sessions = tracking.list_all_sessions(date, None)?;
+            let first = sessions.first().unwrap();
+            let second = sessions.get(1).unwrap();
+
+            assert_eq!(first.project.id, 1);
+            assert!(!first.is_started);
+            assert_eq!(first.total_seconds, 900);
+
+            assert_eq!(second.project.id, 2);
+            assert!(!second.is_started);
+            assert_eq!(second.total_seconds, 900);
 
             Ok(())
         }
