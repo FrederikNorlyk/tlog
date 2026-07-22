@@ -174,69 +174,14 @@ impl<'a> SessionTable<'a> {
     ///
     /// Returns an error if executing user commands fails.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, AppError> {
-        if let Some(project_select) = &mut self.project_select {
-            if key_event.code == KeyCode::Esc {
-                self.project_select = None;
-                return Ok(KeyEventResult::Consumed);
-            }
-
-            match project_select.handle_key_event(key_event)? {
-                ProjectSelectEvent::Selected { project_id } => {
-                    let tracking = Tracking::new(self.connection);
-
-                    tracking.start(project_id)?;
-                    self.sessions = tracking.list_all_sessions(self.date, None)?;
-                    self.project_select = None;
-                }
-                ProjectSelectEvent::Ignore => {}
-            }
-
-            return Ok(KeyEventResult::Consumed);
-        } else if let Some(dialog) = &mut self.manual_session_dialog {
-            match dialog.handle_key_event(key_event) {
-                ManualSessionEvent::Save { total_seconds } => {
-                    self.set_manual_session(total_seconds)?;
-                    self.manual_session_dialog = None;
-                }
-                ManualSessionEvent::Cancel => {
-                    self.manual_session_dialog = None;
-                }
-                ManualSessionEvent::Consumed => {}
-            }
-
-            return Ok(KeyEventResult::Consumed);
+        if self.project_select.is_some() {
+            return self.handle_project_select_key_event(key_event);
+        } else if self.manual_session_dialog.is_some() {
+            return self.handle_manual_session_dialog_key_event(key_event);
         } else if self.is_showing_reset_alert_dialog {
-            return match AlertDialog::handle_key_code(key_event.code) {
-                AlertDialogEvent::Confirm => {
-                    self.reset_session()?;
-                    self.is_showing_reset_alert_dialog = false;
-                    Ok(KeyEventResult::Consumed)
-                }
-                AlertDialogEvent::Cancel => {
-                    self.is_showing_reset_alert_dialog = false;
-                    Ok(KeyEventResult::Consumed)
-                }
-                AlertDialogEvent::Ignore => Ok(KeyEventResult::Unused),
-            };
+            return self.handle_alert_dialog_key_event(key_event);
         } else if self.is_showing_copy_keybinds {
-            let mut did_match = true;
-
-            match key_event.code {
-                KeyCode::Char('c') => self.copy_to_clipboard(CopyContent::All)?,
-                KeyCode::Char('n') => self.copy_to_clipboard(CopyContent::Name)?,
-                KeyCode::Char('d') => self.copy_to_clipboard(CopyContent::Description)?,
-                KeyCode::Char('t') => self.copy_to_clipboard(CopyContent::Time)?,
-                KeyCode::Char('p') => self.copy_to_clipboard(CopyContent::Project)?,
-                KeyCode::Esc => {}
-                _ => did_match = false,
-            }
-
-            if did_match {
-                self.is_showing_copy_keybinds = false;
-                return Ok(KeyEventResult::Consumed);
-            }
-
-            return Ok(KeyEventResult::Unused);
+            return self.handle_copy_key_event(key_event);
         }
 
         let has_selected_session = self.get_selected_session().is_some();
@@ -289,6 +234,97 @@ impl<'a> SessionTable<'a> {
         }
 
         if did_match {
+            return Ok(KeyEventResult::Consumed);
+        }
+
+        Ok(KeyEventResult::Unused)
+    }
+
+    fn handle_project_select_key_event(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> Result<KeyEventResult, AppError> {
+        let Some(project_select) = &mut self.project_select else {
+            return Err(AppError::InvalidState {
+                message: "No project select",
+            });
+        };
+
+        if key_event.code == KeyCode::Esc {
+            self.project_select = None;
+            return Ok(KeyEventResult::Consumed);
+        }
+
+        match project_select.handle_key_event(key_event)? {
+            ProjectSelectEvent::Selected { project_id } => {
+                let tracking = Tracking::new(self.connection);
+
+                tracking.start(project_id)?;
+                self.sessions = tracking.list_all_sessions(self.date, None)?;
+                self.project_select = None;
+            }
+            ProjectSelectEvent::Ignore => {}
+        }
+
+        Ok(KeyEventResult::Consumed)
+    }
+
+    fn handle_manual_session_dialog_key_event(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> Result<KeyEventResult, AppError> {
+        let Some(dialog) = &mut self.manual_session_dialog else {
+            return Err(AppError::InvalidState {
+                message: "No project select",
+            });
+        };
+        match dialog.handle_key_event(key_event) {
+            ManualSessionEvent::Save { total_seconds } => {
+                self.set_manual_session(total_seconds)?;
+                self.manual_session_dialog = None;
+            }
+            ManualSessionEvent::Cancel => {
+                self.manual_session_dialog = None;
+            }
+            ManualSessionEvent::Consumed => {}
+        }
+
+        Ok(KeyEventResult::Consumed)
+    }
+
+    fn handle_alert_dialog_key_event(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> Result<KeyEventResult, AppError> {
+        match AlertDialog::handle_key_code(key_event.code) {
+            AlertDialogEvent::Confirm => {
+                self.reset_session()?;
+                self.is_showing_reset_alert_dialog = false;
+                Ok(KeyEventResult::Consumed)
+            }
+            AlertDialogEvent::Cancel => {
+                self.is_showing_reset_alert_dialog = false;
+                Ok(KeyEventResult::Consumed)
+            }
+            AlertDialogEvent::Ignore => Ok(KeyEventResult::Unused),
+        }
+    }
+
+    fn handle_copy_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, AppError> {
+        let mut did_match = true;
+
+        match key_event.code {
+            KeyCode::Char('c') => self.copy_to_clipboard(CopyContent::All)?,
+            KeyCode::Char('n') => self.copy_to_clipboard(CopyContent::Name)?,
+            KeyCode::Char('d') => self.copy_to_clipboard(CopyContent::Description)?,
+            KeyCode::Char('t') => self.copy_to_clipboard(CopyContent::Time)?,
+            KeyCode::Char('p') => self.copy_to_clipboard(CopyContent::Project)?,
+            KeyCode::Esc => {}
+            _ => did_match = false,
+        }
+
+        if did_match {
+            self.is_showing_copy_keybinds = false;
             return Ok(KeyEventResult::Consumed);
         }
 
