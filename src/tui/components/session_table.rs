@@ -1,9 +1,8 @@
 use crate::core::app_error::AppError;
 use crate::core::clipboard::clipboard_backend::ClipboardBackend;
 use crate::core::config::Config;
-use crate::core::format::Format;
 use crate::core::time_format::TimeFormat;
-use crate::core::tracking::Tracking;
+use crate::core::tracking::{TimeAdjustmentOperation, Tracking};
 use crate::model::session::Session;
 use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
 use crate::tui::components::keybinds_dialog::Keybind;
@@ -54,7 +53,7 @@ impl<'a> SessionTable<'a> {
     ) -> Result<Self, AppError> {
         let mut table_state = TableState::default();
         let tracking = Tracking::new(connection);
-        let sessions = tracking.list_all_sessions(date)?;
+        let sessions = tracking.list_all_sessions(date, None)?;
 
         if !sessions.is_empty() {
             table_state.select_next();
@@ -91,7 +90,7 @@ impl<'a> SessionTable<'a> {
 
         for session in &self.sessions {
             let description = session.project.description.as_deref().unwrap_or_default();
-            let duration = Format::seconds_to_duration(session.total_seconds, self.time_format);
+            let duration = self.time_format.format(session.total_seconds);
             let name = session.project.name.as_str();
             let name_length = u16::try_from(name.len()).unwrap_or(u16::MAX);
 
@@ -114,7 +113,7 @@ impl<'a> SessionTable<'a> {
         let footer = Row::new(vec![
             Cell::from("Total").bold(),
             Cell::from(""),
-            Cell::from(Format::seconds_to_duration(total_seconds, self.time_format)).underlined(),
+            Cell::from(self.time_format.format(total_seconds)).underlined(),
         ]);
 
         let duration_width = match self.time_format {
@@ -175,69 +174,14 @@ impl<'a> SessionTable<'a> {
     ///
     /// Returns an error if executing user commands fails.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, AppError> {
-        if let Some(project_select) = &mut self.project_select {
-            if key_event.code == KeyCode::Esc {
-                self.project_select = None;
-                return Ok(KeyEventResult::Consumed);
-            }
-
-            match project_select.handle_key_event(key_event)? {
-                ProjectSelectEvent::Selected { project_id } => {
-                    let tracking = Tracking::new(self.connection);
-
-                    tracking.start(project_id)?;
-                    self.sessions = tracking.list_all_sessions(self.date)?;
-                    self.project_select = None;
-                }
-                ProjectSelectEvent::Ignore => {}
-            }
-
-            return Ok(KeyEventResult::Consumed);
-        } else if let Some(dialog) = &mut self.manual_session_dialog {
-            match dialog.handle_key_event(key_event) {
-                ManualSessionEvent::Save { total_seconds } => {
-                    self.set_manual_session(total_seconds)?;
-                    self.manual_session_dialog = None;
-                }
-                ManualSessionEvent::Cancel => {
-                    self.manual_session_dialog = None;
-                }
-                ManualSessionEvent::Consumed => {}
-            }
-
-            return Ok(KeyEventResult::Consumed);
+        if self.project_select.is_some() {
+            return self.handle_project_select_key_event(key_event);
+        } else if self.manual_session_dialog.is_some() {
+            return self.handle_manual_session_dialog_key_event(key_event);
         } else if self.is_showing_reset_alert_dialog {
-            return match AlertDialog::handle_key_code(key_event.code) {
-                AlertDialogEvent::Confirm => {
-                    self.reset_session()?;
-                    self.is_showing_reset_alert_dialog = false;
-                    Ok(KeyEventResult::Consumed)
-                }
-                AlertDialogEvent::Cancel => {
-                    self.is_showing_reset_alert_dialog = false;
-                    Ok(KeyEventResult::Consumed)
-                }
-                AlertDialogEvent::Ignore => Ok(KeyEventResult::Unused),
-            };
+            return self.handle_alert_dialog_key_event(key_event);
         } else if self.is_showing_copy_keybinds {
-            let mut did_match = true;
-
-            match key_event.code {
-                KeyCode::Char('c') => self.copy_to_clipboard(CopyContent::All)?,
-                KeyCode::Char('n') => self.copy_to_clipboard(CopyContent::Name)?,
-                KeyCode::Char('d') => self.copy_to_clipboard(CopyContent::Description)?,
-                KeyCode::Char('t') => self.copy_to_clipboard(CopyContent::Time)?,
-                KeyCode::Char('p') => self.copy_to_clipboard(CopyContent::Project)?,
-                KeyCode::Esc => {}
-                _ => did_match = false,
-            }
-
-            if did_match {
-                self.is_showing_copy_keybinds = false;
-                return Ok(KeyEventResult::Consumed);
-            }
-
-            return Ok(KeyEventResult::Unused);
+            return self.handle_copy_key_event(key_event);
         }
 
         let has_selected_session = self.get_selected_session().is_some();
@@ -262,6 +206,16 @@ impl<'a> SessionTable<'a> {
             }
             KeyCode::Char('D') if has_selected_session => self.reset_session()?,
             KeyCode::Char(' ') if has_selected_session => self.toggle_session()?,
+            KeyCode::Char('a') if ctrl_key_is_held && has_selected_session => {
+                self.adjust_selected_session_by_fifteen_minutes(
+                    TimeAdjustmentOperation::Increment,
+                )?;
+            }
+            KeyCode::Char('x') if ctrl_key_is_held && has_selected_session => {
+                self.adjust_selected_session_by_fifteen_minutes(
+                    TimeAdjustmentOperation::Decrement,
+                )?;
+            }
             KeyCode::Char('a') => {
                 self.project_select = Some(ProjectSelect::new(self.connection, self.date)?);
             }
@@ -286,6 +240,97 @@ impl<'a> SessionTable<'a> {
         Ok(KeyEventResult::Unused)
     }
 
+    fn handle_project_select_key_event(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> Result<KeyEventResult, AppError> {
+        let Some(project_select) = &mut self.project_select else {
+            return Err(AppError::InvalidState {
+                message: "No project select",
+            });
+        };
+
+        if key_event.code == KeyCode::Esc {
+            self.project_select = None;
+            return Ok(KeyEventResult::Consumed);
+        }
+
+        match project_select.handle_key_event(key_event)? {
+            ProjectSelectEvent::Selected { project_id } => {
+                let tracking = Tracking::new(self.connection);
+
+                tracking.start(project_id)?;
+                self.sessions = tracking.list_all_sessions(self.date, None)?;
+                self.project_select = None;
+            }
+            ProjectSelectEvent::Ignore => {}
+        }
+
+        Ok(KeyEventResult::Consumed)
+    }
+
+    fn handle_manual_session_dialog_key_event(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> Result<KeyEventResult, AppError> {
+        let Some(dialog) = &mut self.manual_session_dialog else {
+            return Err(AppError::InvalidState {
+                message: "No project select",
+            });
+        };
+        match dialog.handle_key_event(key_event) {
+            ManualSessionEvent::Save { total_seconds } => {
+                self.set_manual_session(total_seconds)?;
+                self.manual_session_dialog = None;
+            }
+            ManualSessionEvent::Cancel => {
+                self.manual_session_dialog = None;
+            }
+            ManualSessionEvent::Consumed => {}
+        }
+
+        Ok(KeyEventResult::Consumed)
+    }
+
+    fn handle_alert_dialog_key_event(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> Result<KeyEventResult, AppError> {
+        match AlertDialog::handle_key_code(key_event.code) {
+            AlertDialogEvent::Confirm => {
+                self.reset_session()?;
+                self.is_showing_reset_alert_dialog = false;
+                Ok(KeyEventResult::Consumed)
+            }
+            AlertDialogEvent::Cancel => {
+                self.is_showing_reset_alert_dialog = false;
+                Ok(KeyEventResult::Consumed)
+            }
+            AlertDialogEvent::Ignore => Ok(KeyEventResult::Unused),
+        }
+    }
+
+    fn handle_copy_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, AppError> {
+        let mut did_match = true;
+
+        match key_event.code {
+            KeyCode::Char('c') => self.copy_to_clipboard(CopyContent::All)?,
+            KeyCode::Char('n') => self.copy_to_clipboard(CopyContent::Name)?,
+            KeyCode::Char('d') => self.copy_to_clipboard(CopyContent::Description)?,
+            KeyCode::Char('t') => self.copy_to_clipboard(CopyContent::Time)?,
+            KeyCode::Char('p') => self.copy_to_clipboard(CopyContent::Project)?,
+            KeyCode::Esc => {}
+            _ => did_match = false,
+        }
+
+        if did_match {
+            self.is_showing_copy_keybinds = false;
+            return Ok(KeyEventResult::Consumed);
+        }
+
+        Ok(KeyEventResult::Unused)
+    }
+
     fn shift_date(&mut self, duration: Duration) -> Result<(), AppError> {
         // Overflowing current date is not an issue, so using expect here is fine.
         self.date = self
@@ -294,7 +339,7 @@ impl<'a> SessionTable<'a> {
             .expect("Could not shift date");
 
         let tracking = Tracking::new(self.connection);
-        self.sessions = tracking.list_all_sessions(self.date)?;
+        self.sessions = tracking.list_all_sessions(self.date, None)?;
 
         Ok(())
     }
@@ -308,7 +353,24 @@ impl<'a> SessionTable<'a> {
 
         let tracking = Tracking::new(self.connection);
         tracking.toggle(session.project.id)?;
-        self.sessions = tracking.list_all_sessions(self.date)?;
+        self.sessions = tracking.list_all_sessions(self.date, None)?;
+
+        Ok(())
+    }
+
+    fn adjust_selected_session_by_fifteen_minutes(
+        &mut self,
+        operation: TimeAdjustmentOperation,
+    ) -> Result<(), AppError> {
+        let Some(session) = self.get_selected_session() else {
+            return Err(AppError::InvalidState {
+                message: "No selected session",
+            });
+        };
+
+        let tracking = Tracking::new(self.connection);
+        tracking.adjust_by_fifteen_minutes(session.project.id, self.date, operation)?;
+        self.sessions = tracking.list_all_sessions(self.date, None)?;
 
         Ok(())
     }
@@ -322,7 +384,7 @@ impl<'a> SessionTable<'a> {
 
         let tracking = Tracking::new(self.connection);
         tracking.reset(session.project.id, self.date)?;
-        self.sessions = tracking.list_all_sessions(self.date)?;
+        self.sessions = tracking.list_all_sessions(self.date, None)?;
 
         Ok(())
     }
@@ -348,10 +410,7 @@ impl<'a> SessionTable<'a> {
                     output.push(Self::escape_semicolon(description));
                 }
 
-                output.push(Format::seconds_to_duration(
-                    session.total_seconds,
-                    self.time_format,
-                ));
+                output.push(self.time_format.format(session.total_seconds));
 
                 output.join(";")
             }
@@ -363,9 +422,7 @@ impl<'a> SessionTable<'a> {
                     String::new()
                 }
             }
-            CopyContent::Time => {
-                Format::seconds_to_duration(session.total_seconds, self.time_format)
-            }
+            CopyContent::Time => self.time_format.format(session.total_seconds),
             CopyContent::Project => {
                 let mut project = Self::escape_semicolon(&session.project.name);
                 if let Some(description) = &session.project.description {
@@ -402,7 +459,7 @@ impl<'a> SessionTable<'a> {
         let tracking = Tracking::new(self.connection);
 
         tracking.set(session.project.id, self.date, total_seconds)?;
-        self.sessions = tracking.list_all_sessions(self.date)?;
+        self.sessions = tracking.list_all_sessions(self.date, None)?;
 
         Ok(())
     }
@@ -414,6 +471,14 @@ impl<'a> SessionTable<'a> {
             Keybind::new("e".to_string(), "Edit tracked time".to_string()),
             Keybind::new("space".to_string(), "Toggle time tracking".to_string()),
             Keybind::new("d".to_string(), "Delete session".to_string()),
+            Keybind::new(
+                "ctrl+a".to_string(),
+                "Increment session by 15 min".to_string(),
+            ),
+            Keybind::new(
+                "ctrl+x".to_string(),
+                "Decrement session by 15 min".to_string(),
+            ),
             Keybind::new("delete".to_string(), "Delete session".to_string()),
             Keybind::new("D".to_string(), "Force delete session".to_string()),
             Keybind::new("c".to_string(), "Copy".to_string()),
@@ -537,7 +602,7 @@ mod tests {
 
         assert_eq!(
             joined,
-            "a - Track a new project e - Edit tracked time space - Toggle time tracking d - Delete session delete - Delete session D - Force delete session c - Copy f - Change time format k - Select previous row ↑ - Select previous row j - Select next row ↓ - Select next row g - Select first row home - Select first row G - Select last row end - Select last row ctrl+u - Scroll up half a page ctrl+d - Scroll down half a page page up - Scroll up a page page down - Scroll down a page h - Select previous date ← - Select previous date l - Select next date → - Select next date"
+            "a - Track a new project e - Edit tracked time space - Toggle time tracking d - Delete session ctrl+a - Increment session by 15 min ctrl+x - Decrement session by 15 min delete - Delete session D - Force delete session c - Copy f - Change time format k - Select previous row ↑ - Select previous row j - Select next row ↓ - Select next row g - Select first row home - Select first row G - Select last row end - Select last row ctrl+u - Scroll up half a page ctrl+d - Scroll down half a page page up - Scroll up a page page down - Scroll down a page h - Select previous date ← - Select previous date l - Select next date → - Select next date"
         );
     }
 
@@ -944,6 +1009,51 @@ mod tests {
             assert!(!first.is_started);
             assert_eq!(second.project.id, 1);
             assert!(!second.is_started);
+        }
+
+        #[test]
+        fn adjust_by_fifteen_minutes() {
+            let context = initialize_context();
+            let date = get_test_date();
+
+            let mut table = SessionTable::new(
+                context.connection(),
+                TimeFormat::HoursMinutes,
+                date,
+                false,
+                Box::new(MockClipboard::default()),
+            )
+            .unwrap();
+
+            // -------------------
+            // Increment by 15 min
+            // -------------------
+            let ctrl_e = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+            let event = table.handle_key_event(ctrl_e).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+
+            let tracking = Tracking::new(context.connection());
+            let sessions = tracking.list_all_sessions(date, Some(2)).unwrap();
+            let session = sessions.first().unwrap();
+
+            assert_eq!(session.project.id, 2);
+            assert!(!session.is_started);
+            assert_eq!(session.total_seconds, 1800);
+
+            // -------------------
+            // Decrement by 15 min
+            // -------------------
+            let ctrl_x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+            let event = table.handle_key_event(ctrl_x).unwrap();
+            assert_eq!(event, KeyEventResult::Consumed);
+
+            let tracking = Tracking::new(context.connection());
+            let sessions = tracking.list_all_sessions(date, Some(2)).unwrap();
+            let session = sessions.first().unwrap();
+
+            assert_eq!(session.project.id, 2);
+            assert!(!session.is_started);
+            assert_eq!(session.total_seconds, 900);
         }
 
         #[test]

@@ -19,7 +19,7 @@ Run the installation script:
 curl -sSL https://raw.githubusercontent.com/FrederikNorlyk/tlog/main/scripts/linux-install.sh | bash
 ```
 
-# Directory layout
+## Directory layout
 
 tLog uses the [directories::ProjectDirs](https://docs.rs/directories/latest/directories/struct.ProjectDirs.html) crate
 to follow OS conventions for application storage locations.
@@ -43,7 +43,7 @@ TODO: These are probably wrong
 - `%AppData%\FrederikNorlyk\tlog\data` for data
 - `%AppData%\FrederikNorlyk\tlog\config` for configuration
 
-## Configuration directory
+### Configuration directory
 
 The configuration directory stores a single TOML file called `tlog.toml`, used to control application behavior.
 
@@ -57,14 +57,14 @@ Currently supported settings:
 
 - time_format: controls how durations are displayed in the UI
 
-### Override config directory
+#### Override config directory
 
 You can override the default config location by setting the environment variable `TLOG_CONFIG_DIR`.
 
-## Data directory
+### Data directory
 
 The data directory stores the SQLite database used for tracking time entries.
 
-### Override data directory
+#### Override data directory
 
 You can override the default data location by setting the environment variable `TLOG_DATA_DIR`.

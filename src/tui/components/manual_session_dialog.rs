@@ -1,4 +1,3 @@
-use crate::core::format::Format;
 use crate::core::time_format::TimeFormat;
 use crate::tui::components::dialog::Dialog;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -82,7 +81,7 @@ impl<'a> ManualSessionDialog<'a> {
 
         let time_format = self.time_format;
 
-        Format::string_to_seconds(text, time_format)
+        time_format.parse(text)
     }
 }
 

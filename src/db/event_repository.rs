@@ -18,7 +18,7 @@ impl<'a> EventRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if `SQLite` fails to execute the insert statement, for
-    /// example because the database connection is invalid, the `event` table
+    /// example, because the database connection is invalid, the `event` table
     /// does not exist, or the provided data violates a database constraint.
     pub fn insert(&self, project_id: i32, event_type: EventType, timestamp: i64) -> Result<()> {
         self.connection.execute(
@@ -35,7 +35,7 @@ impl<'a> EventRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if `SQLite` fails to execute the delete statement, for
-    /// example because the database connection is invalid or the `event` table
+    /// example, because the database connection is invalid or the `event` table
     /// does not exist.
     pub fn delete(&self, id: i32) -> Result<bool> {
         let deleted_count = self.connection.execute(
@@ -51,7 +51,7 @@ impl<'a> EventRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if `SQLite` fails to execute the delete statement, for
-    /// example because the database connection is invalid or the `event` table
+    /// example, because the database connection is invalid or the `event` table
     /// does not exist.
     pub fn delete_all_in(&self, project_id: i32, date: Date) -> Result<bool> {
         let deleted_count = self.connection.execute(
@@ -162,18 +162,23 @@ impl<'a> EventRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if the query fails or row mapping fails.
-    pub fn for_each<F>(&self, date: Date, mut consumer: F) -> Result<()>
+    pub fn for_each<F>(&self, date: Date, project_id: Option<i32>, mut consumer: F) -> Result<()>
     where
         F: FnMut(Event),
     {
         let mut statement = self.connection.prepare(
             "SELECT * FROM event
-            WHERE timestamp >= unixepoch(:date) AND timestamp < unixepoch(:date, '+1 day')
+            WHERE
+                timestamp >= unixepoch(:date) AND
+                timestamp < unixepoch(:date, '+1 day') AND
+                (:project_id IS NULL OR project_id = :project_id)
             ORDER BY timestamp",
         )?;
 
-        let rows =
-            statement.query_map(named_params! {":date": date.to_string()}, Event::from_row)?;
+        let rows = statement.query_map(
+            named_params! {":date": date.to_string(), ":project_id": project_id},
+            Event::from_row,
+        )?;
 
         for event in rows {
             consumer(event?);

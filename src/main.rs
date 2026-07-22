@@ -6,7 +6,6 @@ use tlog::cli::config_command::ConfigCommand;
 use tlog::cli::project_command::handle_project_command;
 use tlog::core::clipboard::system_clipboard::SystemClipboard;
 use tlog::core::config::Config;
-use tlog::core::format::Format;
 use tlog::core::time_format::TimeFormat;
 use tlog::core::tracking::Tracking;
 use tlog::db::database::Database;
@@ -67,14 +66,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             let time_format = Config::get()?.time_format();
 
             tracking
-                .list_all_sessions(query_date)?
+                .list_all_sessions(query_date, None)?
                 .iter()
                 .for_each(|session| {
                     total += session.total_seconds;
                     print_session(session, time_format);
                 });
 
-            let duration = Format::seconds_to_duration(total, time_format);
+            let duration = time_format.format(total);
 
             println!("{BOLD}{duration:10}      Total{RESET}");
         }
@@ -109,7 +108,7 @@ fn print_session(session: &Session, time_format: TimeFormat) {
     const RESET: &str = "\x1b[0m";
 
     let project = &session.project;
-    let mut duration = Format::seconds_to_duration(session.total_seconds, time_format);
+    let mut duration = time_format.format(session.total_seconds);
 
     if session.is_started {
         duration.push('*');
