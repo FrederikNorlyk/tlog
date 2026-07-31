@@ -1,4 +1,5 @@
 use crate::core::app_error::AppError;
+use crate::core::config::Config;
 use crate::db::project_repository::ProjectRepository;
 use crate::model::project::Project;
 use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
@@ -147,6 +148,7 @@ impl<'a> ProjectTable<'a> {
             KeyCode::Char('k') | KeyCode::Up => self.table_state.select_previous(),
             KeyCode::Char('u') if ctrl_key_is_held => self.table_state.scroll_up_by(half_page),
             KeyCode::Char('d') if ctrl_key_is_held => self.table_state.scroll_down_by(half_page),
+            KeyCode::Char('o') if has_selected_project => self.open_selected_project()?,
             KeyCode::PageUp => self.table_state.scroll_up_by(self.table_height),
             KeyCode::PageDown => self.table_state.scroll_down_by(self.table_height),
             KeyCode::Char('g') | KeyCode::Home => self.table_state.select_first(),
@@ -177,6 +179,24 @@ impl<'a> ProjectTable<'a> {
         let project_repository = ProjectRepository::new(self.connection);
         project_repository.delete(project.id)?;
         self.refresh_projects()?;
+
+        Ok(())
+    }
+
+    fn open_selected_project(&mut self) -> Result<(), AppError> {
+        let Some(project) = self.get_selected_project() else {
+            return Err(AppError::InvalidState {
+                message: "No selected project",
+            });
+        };
+
+        let config = Config::get()?;
+
+        let Some(opener) = config.opener() else {
+            return Ok(());
+        };
+
+        open::that(opener.build_url(project.name.as_str()))?;
 
         Ok(())
     }
@@ -239,9 +259,12 @@ impl<'a> ProjectTable<'a> {
         self.projects.get(selected_index)
     }
 
-    #[must_use]
-    pub fn get_keybinds() -> Vec<Keybind> {
-        vec![
+    /// Get all keybinds for this component.
+    ///
+    /// # Errors
+    /// Returns an error if looking up the configuration fails
+    pub fn get_keybinds() -> Result<Vec<Keybind>, AppError> {
+        let mut binds = vec![
             Keybind::new("a".to_string(), "Add a new project".to_string()),
             Keybind::new("e".to_string(), "Edit project".to_string()),
             Keybind::new("d".to_string(), "Delete project".to_string()),
@@ -259,7 +282,18 @@ impl<'a> ProjectTable<'a> {
             Keybind::new("ctrl+d".to_string(), "Scroll down half a page".to_string()),
             Keybind::new("page up".to_string(), "Scroll up a page".to_string()),
             Keybind::new("page down".to_string(), "Scroll down a page".to_string()),
-        ]
+        ];
+
+        let config = Config::get()?;
+
+        if let Some(opener) = config.opener() {
+            binds.push(Keybind::new(
+                "o".to_string(),
+                opener.description().to_string(),
+            ));
+        }
+
+        Ok(binds)
     }
 
     #[must_use]
@@ -306,6 +340,7 @@ mod tests {
     #[test]
     fn get_keybinds() {
         let keybinds: Vec<String> = ProjectTable::get_keybinds()
+            .unwrap()
             .iter()
             .map(|key| format!("{key}"))
             .collect();

@@ -1,5 +1,6 @@
 use crate::core::paths::Paths;
 use crate::core::time_format::TimeFormat;
+use crate::model::opener::Opener;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -70,12 +71,14 @@ impl Config {
 #[derive(Serialize, Deserialize)]
 pub struct ConfigMetadata {
     time_format: TimeFormat,
+    opener: Option<Opener>,
 }
 
 impl Default for ConfigMetadata {
     fn default() -> Self {
         Self {
             time_format: TimeFormat::HoursMinutesSeconds,
+            opener: None,
         }
     }
 }
@@ -84,6 +87,11 @@ impl ConfigMetadata {
     #[must_use]
     pub fn time_format(&self) -> TimeFormat {
         self.time_format
+    }
+
+    #[must_use]
+    pub fn opener(&self) -> &Option<Opener> {
+        &self.opener
     }
 }
 
@@ -99,4 +107,73 @@ pub enum ConfigError {
     TomlDeserialize(#[from] toml::de::Error),
     #[error("Toml serialization error: {0}")]
     TomlSerialize(#[from] toml::ser::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::constants::CONFIG_DIR_ENV;
+    use serial_test::serial;
+
+    #[allow(unsafe_code)]
+    fn init_new_temp_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        println!("Running tests in {}", temp.path().display());
+
+        unsafe {
+            std::env::set_var(CONFIG_DIR_ENV, temp.path().join("config"));
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn set_time_format() {
+        init_new_temp_dir();
+
+        Config::set_time_format(TimeFormat::DecimalHours).unwrap();
+
+        let config = Config::get().unwrap();
+
+        assert_eq!(TimeFormat::DecimalHours, config.time_format);
+        assert!(config.opener.is_none());
+    }
+
+    mod get {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn default_values() {
+            init_new_temp_dir();
+
+            let config = Config::get().unwrap();
+
+            assert_eq!(TimeFormat::HoursMinutesSeconds, config.time_format);
+            assert!(config.opener.is_none());
+        }
+
+        #[test]
+        #[serial]
+        fn overwritten_values() {
+            init_new_temp_dir();
+
+            let mut config = Config::get().unwrap();
+            config.time_format = TimeFormat::Seconds;
+
+            config.opener = Some(Opener::new(
+                "https://www.test.site/search/%s",
+                "Open in browser",
+            ));
+
+            Config::write(&config).unwrap();
+
+            let config = Config::get().unwrap();
+            let opener = config.opener.unwrap();
+
+            assert_eq!(TimeFormat::Seconds, config.time_format);
+            assert_eq!("https://www.test.site/search/%s", opener.url_template());
+            assert_eq!("Open in browser", opener.description());
+        }
+    }
 }

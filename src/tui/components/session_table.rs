@@ -197,6 +197,7 @@ impl<'a> SessionTable<'a> {
             KeyCode::Char('k') | KeyCode::Up => self.table_state.select_previous(),
             KeyCode::Char('u') if ctrl_key_is_held => self.table_state.scroll_up_by(half_page),
             KeyCode::Char('d') if ctrl_key_is_held => self.table_state.scroll_down_by(half_page),
+            KeyCode::Char('o') if has_selected_session => self.open_selected_project()?,
             KeyCode::PageUp => self.table_state.scroll_up_by(self.table_height),
             KeyCode::PageDown => self.table_state.scroll_down_by(self.table_height),
             KeyCode::Char('g') | KeyCode::Home => self.table_state.select_first(),
@@ -329,6 +330,24 @@ impl<'a> SessionTable<'a> {
         }
 
         Ok(KeyEventResult::Unused)
+    }
+
+    fn open_selected_project(&mut self) -> Result<(), AppError> {
+        let Some(session) = self.get_selected_session() else {
+            return Err(AppError::InvalidState {
+                message: "No selected session",
+            });
+        };
+
+        let config = Config::get()?;
+
+        let Some(opener) = config.opener() else {
+            return Ok(());
+        };
+
+        open::that(opener.build_url(session.project.name.as_str()))?;
+
+        Ok(())
     }
 
     fn shift_date(&mut self, duration: Duration) -> Result<(), AppError> {
@@ -464,9 +483,12 @@ impl<'a> SessionTable<'a> {
         Ok(())
     }
 
-    #[must_use]
-    pub fn get_keybinds() -> Vec<Keybind> {
-        vec![
+    /// Get all keybinds for this component.
+    ///
+    /// # Errors
+    /// Returns an error if looking up the configuration fails
+    pub fn get_keybinds() -> Result<Vec<Keybind>, AppError> {
+        let mut binds = vec![
             Keybind::new("a".to_string(), "Track a new project".to_string()),
             Keybind::new("e".to_string(), "Edit tracked time".to_string()),
             Keybind::new("space".to_string(), "Toggle time tracking".to_string()),
@@ -499,7 +521,18 @@ impl<'a> SessionTable<'a> {
             Keybind::new("←".to_string(), "Select previous date".to_string()),
             Keybind::new("l".to_string(), "Select next date".to_string()),
             Keybind::new("→".to_string(), "Select next date".to_string()),
-        ]
+        ];
+
+        let config = Config::get()?;
+
+        if let Some(opener) = config.opener() {
+            binds.push(Keybind::new(
+                "o".to_string(),
+                opener.description().to_string(),
+            ));
+        }
+
+        Ok(binds)
     }
 
     #[must_use]
@@ -594,6 +627,7 @@ mod tests {
     #[test]
     fn get_keybinds() {
         let keybinds: Vec<String> = SessionTable::get_keybinds()
+            .unwrap()
             .iter()
             .map(|key| format!("{key}"))
             .collect();

@@ -112,7 +112,7 @@ impl<'a> TerminalUserInterface<'a> {
             }
             return Ok(());
         } else if key_event.code == KeyCode::Char('?') {
-            self.show_keybind_dialog_for_active_widget();
+            self.show_keybind_dialog_for_active_widget()?;
             return Ok(());
         }
 
@@ -139,13 +139,15 @@ impl<'a> TerminalUserInterface<'a> {
         Ok(())
     }
 
-    fn show_keybind_dialog_for_active_widget(&mut self) {
+    fn show_keybind_dialog_for_active_widget(&mut self) -> Result<(), AppError> {
         let keybinds = match self.active_widget {
-            ActiveWidget::SessionTable => SessionTable::get_keybinds(),
-            ActiveWidget::ProjectTable => ProjectTable::get_keybinds(),
+            ActiveWidget::SessionTable => SessionTable::get_keybinds()?,
+            ActiveWidget::ProjectTable => ProjectTable::get_keybinds()?,
         };
 
         self.keybind_dialog = Some(KeybindsDialog::new(keybinds));
+
+        Ok(())
     }
 }
 

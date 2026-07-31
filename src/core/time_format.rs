@@ -1,7 +1,7 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Copy, Clone, ValueEnum, Debug)]
+#[derive(Serialize, Deserialize, Copy, Clone, ValueEnum, Debug, Eq, PartialEq)]
 pub enum TimeFormat {
     HoursMinutesSeconds,
     HoursMinutes,
