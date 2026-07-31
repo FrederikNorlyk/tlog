@@ -2,6 +2,8 @@
 
 A CLI + TUI time-tracking tool written in Rust.
 
+[![codecov](https://codecov.io/gh/FrederikNorlyk/tlog>/branch/main/graph/badge.svg)](https://codecov.io/gh/FrederikNorlyk>/tlog>)
+
 ## Overview
 
 tLog tracks time per project using a local SQLite database and provides both:
@@ -50,12 +52,20 @@ The configuration directory stores a single TOML file called `tlog.toml`, used t
 Example:
 
 ```toml
-time_format = "HoursMinutes"
+time_format = "HoursMinutesSeconds"
+
+[opener]
+url = "https://www.subdomain.atlassian.net/browse/%s"
+desc = "Open in Jira"
 ```
 
-Currently supported settings:
+Supported settings:
 
-- time_format: controls how durations are displayed in the UI
+- `time_format`: Controls how durations are displayed in the UI. 
+  - Supported values:`HoursMinutesSeconds`, `HoursMinutes`, `DecimalHours`, and `Seconds`.
+- `opener`: Optional configuration for opening the selected project in a browser using the `o` key.
+  - `url`: URL template. The `%s` placeholder is replaced with the name of the selected project.
+  - `desc`: Description displayed for the opener.
 
 #### Override config directory
 

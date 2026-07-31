@@ -17,6 +17,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let database = Database::new()?;
     database.init()?;
 
+    let config = Config::get()?;
+
     let cli = Cli::parse();
 
     let Some(command) = cli.command else {
@@ -63,7 +65,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let tracking = Tracking::new(database.connection());
             let mut total = 0;
             let query_date = date.unwrap_or_else(|| OffsetDateTime::now_utc().date());
-            let time_format = Config::get()?.time_format();
+            let time_format = config.time_format();
 
             tracking
                 .list_all_sessions(query_date, None)?

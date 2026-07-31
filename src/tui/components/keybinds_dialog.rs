@@ -209,7 +209,7 @@ mod tests {
 
         #[test]
         fn navigation() {
-            let mut dialog = KeybindsDialog::new(SessionTable::get_keybinds());
+            let mut dialog = KeybindsDialog::new(SessionTable::get_keybinds().unwrap());
             dialog.list_height = 10;
 
             let selected_index = dialog.list_state.selected().unwrap();
@@ -327,7 +327,7 @@ mod tests {
 
         #[test]
         fn search() {
-            let mut dialog = KeybindsDialog::new(SessionTable::get_keybinds());
+            let mut dialog = KeybindsDialog::new(SessionTable::get_keybinds().unwrap());
 
             // '/' moves focus to text area
             let event = dialog.handle_key_event(key(KeyCode::Char('/')));
@@ -355,7 +355,7 @@ mod tests {
 
         #[test]
         fn close() {
-            let mut dialog = KeybindsDialog::new(SessionTable::get_keybinds());
+            let mut dialog = KeybindsDialog::new(SessionTable::get_keybinds().unwrap());
 
             let event = dialog.handle_key_event(key(KeyCode::Esc));
             assert_eq!(event, Closed);
@@ -368,10 +368,9 @@ mod tests {
         use crate::tui::components::session_table::SessionTable;
         use crate::tui::render_test_util::RenderTestUtil;
 
-        // TODO: Focused text field. Filtered rows
         #[test]
         fn session_table() {
-            let mut dialog = KeybindsDialog::new(SessionTable::get_keybinds());
+            let mut dialog = KeybindsDialog::new(SessionTable::get_keybinds().unwrap());
 
             let area = Rect::new(0, 0, 40, 30);
             let mut buf = Buffer::empty(area);
@@ -416,7 +415,7 @@ mod tests {
 
         #[test]
         fn project_table() {
-            let mut dialog = KeybindsDialog::new(ProjectTable::get_keybinds());
+            let mut dialog = KeybindsDialog::new(ProjectTable::get_keybinds().unwrap());
 
             let area = Rect::new(0, 0, 40, 30);
             let mut buf = Buffer::empty(area);
@@ -461,7 +460,7 @@ mod tests {
 
         #[test]
         fn searching() {
-            let mut dialog = KeybindsDialog::new(ProjectTable::get_keybinds());
+            let mut dialog = KeybindsDialog::new(ProjectTable::get_keybinds().unwrap());
             dialog.handle_key_event(key(KeyCode::Char('/')));
             dialog.handle_key_event(key(KeyCode::Char('d')));
             dialog.handle_key_event(key(KeyCode::Char('e')));

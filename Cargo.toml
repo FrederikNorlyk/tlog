@@ -28,3 +28,8 @@ ratatui-textarea = "0.9.1"
 arboard = "3.6.1"
 toml = "1.1.2"
 serde = { version = "1.0.228", features = ["derive"] }
+open = "5.4.0"
+
+[dev-dependencies]
+serial_test = "4.0.1"
+tempfile = "3.27.0"
