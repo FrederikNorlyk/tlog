@@ -2,7 +2,7 @@
 
 A CLI + TUI time-tracking tool written in Rust.
 
-[![codecov](https://codecov.io/gh/FrederikNorlyk/tlog>/branch/main/graph/badge.svg)](https://codecov.io/gh/FrederikNorlyk>/tlog>)
+[![codecov](https://codecov.io/gh/FrederikNorlyk/tlog/branch/main/graph/badge.svg)](https://codecov.io/gh/FrederikNorlyk/tlog)
 
 ## Overview
 
