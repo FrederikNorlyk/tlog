@@ -125,6 +125,13 @@ mod tests {
         }
     }
 
+    #[allow(unsafe_code)]
+    fn teardown() {
+        unsafe {
+            std::env::remove_var(CONFIG_DIR_ENV);
+        }
+    }
+
     #[test]
     #[serial]
     fn set_time_format() {
@@ -136,6 +143,8 @@ mod tests {
 
         assert_eq!(TimeFormat::DecimalHours, config.time_format);
         assert!(config.opener.is_none());
+
+        teardown();
     }
 
     mod get {
@@ -151,6 +160,8 @@ mod tests {
 
             assert_eq!(TimeFormat::HoursMinutesSeconds, config.time_format);
             assert!(config.opener.is_none());
+
+            teardown();
         }
 
         #[test]
@@ -174,6 +185,8 @@ mod tests {
             assert_eq!(TimeFormat::Seconds, config.time_format);
             assert_eq!("https://www.test.site/search/%s", opener.url_template());
             assert_eq!("Open in browser", opener.description());
+
+            teardown();
         }
     }
 }

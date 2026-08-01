@@ -35,6 +35,14 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    #[allow(unsafe_code)]
+    fn teardown() {
+        unsafe {
+            std::env::remove_var(CONFIG_DIR_ENV);
+            std::env::remove_var(DATA_DIR_ENV);
+        }
+    }
+
     mod data_dir {
         use super::*;
 
@@ -50,6 +58,8 @@ mod tests {
             let actual = Paths::data_dir().unwrap();
 
             assert_eq!(actual, expected);
+
+            teardown();
         }
 
         #[test]
@@ -63,6 +73,8 @@ mod tests {
             let expected = std::env::var("HOME").unwrap();
 
             assert_eq!(actual, PathBuf::from(expected).join(".local/share/tlog"));
+
+            teardown();
         }
     }
 
@@ -81,6 +93,8 @@ mod tests {
             let actual = Paths::config_dir().unwrap();
 
             assert_eq!(actual, expected);
+
+            teardown();
         }
 
         #[test]
@@ -94,6 +108,8 @@ mod tests {
             let expected = std::env::var("HOME").unwrap();
 
             assert_eq!(actual, PathBuf::from(expected).join(".config/tlog"));
+
+            teardown();
         }
     }
 }
