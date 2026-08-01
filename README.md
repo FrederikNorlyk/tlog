@@ -35,10 +35,7 @@ The default locations are as follows
 
 **macOS**
 
-TODO: These are probably wrong
-
-- `~/Library/Application Support/tlog/` for data
-- `~/Library/Preferences/tlog/` for configuration
+- `~/Library/Application Support/com.FrederikNorlyk.tlog` for data and configuration
 
 **Windows**
 
