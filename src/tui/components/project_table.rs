@@ -171,9 +171,7 @@ impl<'a> ProjectTable<'a> {
 
     fn delete_project(&mut self) -> Result<(), AppError> {
         let Some(project) = self.get_selected_project() else {
-            return Err(AppError::InvalidState {
-                message: "No selected project",
-            });
+            return Err(AppError::InvalidState("No selected project"));
         };
 
         let project_repository = ProjectRepository::new(self.connection);
@@ -185,9 +183,7 @@ impl<'a> ProjectTable<'a> {
 
     fn open_selected_project(&mut self) -> Result<(), AppError> {
         let Some(project) = self.get_selected_project() else {
-            return Err(AppError::InvalidState {
-                message: "No selected project",
-            });
+            return Err(AppError::InvalidState("No selected project"));
         };
 
         let config = Config::get()?;
@@ -203,9 +199,7 @@ impl<'a> ProjectTable<'a> {
 
     fn edit_project(&mut self) -> Result<(), AppError> {
         let Some(project) = self.get_selected_project() else {
-            return Err(AppError::InvalidState {
-                message: "No selected project",
-            });
+            return Err(AppError::InvalidState("No selected project"));
         };
 
         self.project_form = Some(ProjectForm::new(

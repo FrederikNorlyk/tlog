@@ -72,6 +72,7 @@ impl Config {
 pub struct ConfigMetadata {
     time_format: TimeFormat,
     opener: Option<Opener>,
+    issue_tracker: Option<IssueTrackerProvider>,
 }
 
 impl Default for ConfigMetadata {
@@ -79,6 +80,7 @@ impl Default for ConfigMetadata {
         Self {
             time_format: TimeFormat::HoursMinutesSeconds,
             opener: None,
+            issue_tracker: None,
         }
     }
 }
@@ -93,6 +95,12 @@ impl ConfigMetadata {
     pub fn opener(&self) -> &Option<Opener> {
         &self.opener
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IssueTrackerProvider {
+    Jira,
 }
 
 #[derive(Debug, Error)]
