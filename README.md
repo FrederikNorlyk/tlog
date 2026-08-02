@@ -26,7 +26,7 @@ curl -sSL https://raw.githubusercontent.com/FrederikNorlyk/tlog/main/scripts/lin
 Run the installer script with the following one-liner (downloads the installer and runs it):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://raw.githubusercontent.com/FrederikNorlyk/tlog/main/scripts/windows-install.ps1' -OutFile $env:TEMP\tlog-install.ps1; & $env:TEMP\tlog-install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command 'Invoke-WebRequest "https://raw.githubusercontent.com/FrederikNorlyk/tlog/main/scripts/windows-install.ps1" -OutFile "$env:TEMP\tlog-install.ps1"; & "$env:TEMP\tlog-install.ps1"'
 ```
 
 ## Directory layout
