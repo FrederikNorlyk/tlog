@@ -21,6 +21,14 @@ Run the installation script:
 curl -sSL https://raw.githubusercontent.com/FrederikNorlyk/tlog/main/scripts/linux-install.sh | bash
 ```
 
+## Windows
+
+Run the installer script with the following one-liner (downloads the installer and runs it):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command 'Invoke-WebRequest "https://raw.githubusercontent.com/FrederikNorlyk/tlog/main/scripts/windows-install.ps1" -OutFile "$env:TEMP\tlog-install.ps1"; & "$env:TEMP\tlog-install.ps1"'
+```
+
 ## Directory layout
 
 tLog uses the [directories::ProjectDirs](https://docs.rs/directories/latest/directories/struct.ProjectDirs.html) crate
