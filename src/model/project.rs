@@ -1,3 +1,4 @@
+use crate::core::issue_tracker::issue::Issue;
 use std::fmt;
 use std::fmt::Formatter;
 
@@ -35,5 +36,15 @@ impl fmt::Display for Project {
         }
 
         Ok(())
+    }
+}
+
+impl From<Issue> for Project {
+    fn from(value: Issue) -> Self {
+        Self {
+            id: 0,
+            name: value.id,
+            description: Some(value.description),
+        }
     }
 }

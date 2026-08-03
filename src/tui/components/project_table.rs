@@ -3,6 +3,7 @@ use crate::core::config::Config;
 use crate::db::project_repository::ProjectRepository;
 use crate::model::project::Project;
 use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
+use crate::tui::components::issue_finder_form::{IssueFinderEvent, IssueFinderForm};
 use crate::tui::components::keybinds_dialog::Keybind;
 use crate::tui::components::project_form::{ProjectForm, ProjectFormEvent};
 use crate::tui::terminal_user_interface::KeyEventResult;
@@ -21,6 +22,7 @@ pub struct ProjectTable<'a> {
     connection: &'a Connection,
     is_showing_deletion_alert_dialog: bool,
     project_form: Option<ProjectForm<'a>>,
+    issue_finder_form: Option<IssueFinderForm<'a>>,
     table_height: u16,
 }
 
@@ -45,6 +47,7 @@ impl<'a> ProjectTable<'a> {
             connection,
             is_showing_deletion_alert_dialog: false,
             project_form: None,
+            issue_finder_form: None,
             table_height: 0,
         })
     }
@@ -86,6 +89,10 @@ impl<'a> ProjectTable<'a> {
         self.table_height = area.height - 2; // Subtract block borders
 
         if let Some(form) = &mut self.project_form {
+            form.render(area, buf);
+        }
+
+        if let Some(form) = &mut self.issue_finder_form {
             form.render(area, buf);
         }
 
@@ -135,6 +142,19 @@ impl<'a> ProjectTable<'a> {
             }
 
             return Ok(KeyEventResult::Consumed);
+        } else if let Some(form) = &mut self.issue_finder_form {
+            match form.handle_key_event(key_event)? {
+                IssueFinderEvent::ProjectFound { project } => {
+                    self.insert_project(project.name.as_str(), project.description.as_deref())?;
+                    self.issue_finder_form = None;
+                }
+                IssueFinderEvent::Cancel => {
+                    self.issue_finder_form = None;
+                }
+                IssueFinderEvent::Consumed => {}
+            }
+
+            return Ok(KeyEventResult::Consumed);
         }
 
         let has_selected_project = self.get_selected_project().is_some();
@@ -143,23 +163,30 @@ impl<'a> ProjectTable<'a> {
 
         let mut did_match = true;
 
-        match key_event.code {
-            KeyCode::Char('j') | KeyCode::Down => self.table_state.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => self.table_state.select_previous(),
-            KeyCode::Char('u') if ctrl_key_is_held => self.table_state.scroll_up_by(half_page),
-            KeyCode::Char('d') if ctrl_key_is_held => self.table_state.scroll_down_by(half_page),
-            KeyCode::Char('o') if has_selected_project => self.open_selected_project()?,
-            KeyCode::PageUp => self.table_state.scroll_up_by(self.table_height),
-            KeyCode::PageDown => self.table_state.scroll_down_by(self.table_height),
-            KeyCode::Char('g') | KeyCode::Home => self.table_state.select_first(),
-            KeyCode::Char('G') | KeyCode::End => self.table_state.select_last(),
-            KeyCode::Char('a') => self.project_form = Some(ProjectForm::new(None, None, None)),
-            KeyCode::Char('e') if has_selected_project => self.edit_project()?,
-            KeyCode::Char('d') | KeyCode::Delete if has_selected_project => {
-                self.is_showing_deletion_alert_dialog = true;
+        if ctrl_key_is_held {
+            match key_event.code {
+                KeyCode::Char('u') => self.table_state.scroll_up_by(half_page),
+                KeyCode::Char('d') => self.table_state.scroll_down_by(half_page),
+                _ => did_match = false,
             }
-            KeyCode::Char('D') if has_selected_project => self.delete_project()?,
-            _ => did_match = false,
+        } else {
+            match key_event.code {
+                KeyCode::Char('j') | KeyCode::Down => self.table_state.select_next(),
+                KeyCode::Char('k') | KeyCode::Up => self.table_state.select_previous(),
+                KeyCode::Char('o') if has_selected_project => self.open_selected_project()?,
+                KeyCode::PageUp => self.table_state.scroll_up_by(self.table_height),
+                KeyCode::PageDown => self.table_state.scroll_down_by(self.table_height),
+                KeyCode::Char('g') | KeyCode::Home => self.table_state.select_first(),
+                KeyCode::Char('G') | KeyCode::End => self.table_state.select_last(),
+                KeyCode::Char('a') => self.try_open_issue_tracker_project_form()?,
+                KeyCode::Char('A') => self.project_form = Some(ProjectForm::new(None, None, None)),
+                KeyCode::Char('e') if has_selected_project => self.edit_project()?,
+                KeyCode::Char('d') | KeyCode::Delete if has_selected_project => {
+                    self.is_showing_deletion_alert_dialog = true;
+                }
+                KeyCode::Char('D') if has_selected_project => self.delete_project()?,
+                _ => did_match = false,
+            }
         }
 
         if did_match {
@@ -177,6 +204,16 @@ impl<'a> ProjectTable<'a> {
         let project_repository = ProjectRepository::new(self.connection);
         project_repository.delete(project.id)?;
         self.refresh_projects()?;
+
+        Ok(())
+    }
+
+    fn try_open_issue_tracker_project_form(&mut self) -> Result<(), AppError> {
+        let Some(issue_tracker) = Config::get()?.issue_tracker().clone() else {
+            return Ok(());
+        };
+
+        self.issue_finder_form = Some(IssueFinderForm::new(Box::new(issue_tracker)));
 
         Ok(())
     }
@@ -387,7 +424,7 @@ mod tests {
         fn project_form() {
             let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
-            table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
+            table.handle_key_event(key(KeyCode::Char('A'))).unwrap();
             let area = Rect::new(0, 0, 70, 17);
             let mut buf = Buffer::empty(area);
 
@@ -489,7 +526,7 @@ mod tests {
 
             // Press 'a' to show project form
             assert!(table.project_form.is_none());
-            table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
+            table.handle_key_event(key(KeyCode::Char('A'))).unwrap();
             assert!(table.project_form.is_some());
 
             // Verify that typing text is consumed by the form
@@ -503,12 +540,12 @@ mod tests {
             assert!(table.project_form.is_none());
 
             // Press 'a' to show project form
-            table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
+            table.handle_key_event(key(KeyCode::Char('A'))).unwrap();
             assert!(table.project_form.is_some());
 
             // Fill out description
             table.handle_key_event(key(KeyCode::Tab)).unwrap();
-            table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
+            table.handle_key_event(key(KeyCode::Char('A'))).unwrap();
 
             // Verify that name is required
             table.handle_key_event(key(KeyCode::Enter)).unwrap();
@@ -516,7 +553,7 @@ mod tests {
 
             // Fill out name
             table.handle_key_event(key(KeyCode::Tab)).unwrap();
-            table.handle_key_event(key(KeyCode::Char('a'))).unwrap();
+            table.handle_key_event(key(KeyCode::Char('A'))).unwrap();
             assert!(table.project_form.is_some());
 
             // Verify that saving the form closes it

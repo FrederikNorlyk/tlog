@@ -1,3 +1,4 @@
+use crate::core::issue_tracker::IssueTracker;
 use crate::core::paths::Paths;
 use crate::core::time_format::TimeFormat;
 use crate::model::opener::Opener;
@@ -72,7 +73,7 @@ impl Config {
 pub struct ConfigMetadata {
     time_format: TimeFormat,
     opener: Option<Opener>,
-    issue_tracker: Option<IssueTrackerProvider>,
+    issue_tracker: Option<IssueTracker>,
 }
 
 impl Default for ConfigMetadata {
@@ -95,12 +96,11 @@ impl ConfigMetadata {
     pub fn opener(&self) -> &Option<Opener> {
         &self.opener
     }
-}
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum IssueTrackerProvider {
-    Jira,
+    #[must_use]
+    pub fn issue_tracker(&self) -> &Option<IssueTracker> {
+        &self.issue_tracker
+    }
 }
 
 #[derive(Debug, Error)]

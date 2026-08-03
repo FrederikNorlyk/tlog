@@ -1,21 +1,23 @@
 pub mod issue;
+pub mod issue_provider;
 pub mod jira_cli;
 
 use crate::core::app_error::AppError;
 use crate::core::issue_tracker::issue::Issue;
+use crate::core::issue_tracker::issue_provider::IssueProvider;
+use crate::core::issue_tracker::jira_cli::JiraCLI;
+use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum IssueTracker {
-    Jira(jira_cli::JiraCLI),
+    Jira { id_prefix: Option<String> },
 }
 
-impl IssueTracker {
-    /// Fetches an issue using the configured issue tracker.
-    ///
-    /// # Errors
-    /// Returns an error if the issue tracker fails to fetch the issue
-    pub fn fetch_issue(&self, name: &str) -> Result<Issue, AppError> {
+impl IssueProvider for IssueTracker {
+    fn fetch_issue(&self, name: &str) -> Result<Option<Issue>, AppError> {
         match self {
-            Self::Jira(config) => config.fetch_issue(name),
+            Self::Jira { id_prefix } => JiraCLI::fetch_issue(name, id_prefix.as_deref()),
         }
     }
 }
