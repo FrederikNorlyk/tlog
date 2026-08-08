@@ -329,7 +329,7 @@ impl<'a> ProjectTable<'a> {
     ///
     /// # Errors
     /// Returns an error if looking up the configuration fails
-    pub fn get_keybinds() -> Result<Vec<Keybind>, AppError> {
+    pub fn get_keybinds(&self) -> Result<Vec<Keybind>, AppError> {
         let mut binds = vec![
             Keybind::new("e".to_string(), "Edit project".to_string()),
             Keybind::new("d".to_string(), "Delete project".to_string()),
@@ -349,9 +349,7 @@ impl<'a> ProjectTable<'a> {
             Keybind::new("page down".to_string(), "Scroll down a page".to_string()),
         ];
 
-        let config = Config::get()?;
-
-        if let Some(issue_tracker) = config.issue_tracker() {
+        if let Some(issue_tracker) = self.config.issue_tracker() {
             let description = match issue_tracker {
                 IssueTracker::Jira { .. } => "Add from Jira",
             };
@@ -369,7 +367,7 @@ impl<'a> ProjectTable<'a> {
             );
         }
 
-        if let Some(opener) = config.opener() {
+        if let Some(opener) = self.config.opener() {
             binds.push(Keybind::new(
                 "o".to_string(),
                 opener.description().to_string(),
@@ -418,7 +416,11 @@ mod tests {
 
     #[test]
     fn get_keybinds() {
-        let keybinds: Vec<String> = ProjectTable::get_keybinds()
+        let context = initialize_context();
+        let table = ProjectTable::new(context.connection()).unwrap();
+
+        let keybinds: Vec<String> = table
+            .get_keybinds()
             .unwrap()
             .iter()
             .map(|key| format!("{key}"))

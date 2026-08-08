@@ -364,6 +364,7 @@ mod tests {
 
     mod render {
         use super::*;
+        use crate::db::db_test_context::DBTestContext;
         use crate::tui::components::project_table::ProjectTable;
         use crate::tui::components::session_table::SessionTable;
         use crate::tui::render_test_util::RenderTestUtil;
@@ -415,7 +416,9 @@ mod tests {
 
         #[test]
         fn project_table() {
-            let mut dialog = KeybindsDialog::new(ProjectTable::get_keybinds().unwrap());
+            let context = DBTestContext::new().unwrap();
+            let table = ProjectTable::new(context.connection()).unwrap();
+            let mut dialog = KeybindsDialog::new(table.get_keybinds().unwrap());
 
             let area = Rect::new(0, 0, 40, 30);
             let mut buf = Buffer::empty(area);
@@ -460,7 +463,9 @@ mod tests {
 
         #[test]
         fn searching() {
-            let mut dialog = KeybindsDialog::new(ProjectTable::get_keybinds().unwrap());
+            let context = DBTestContext::new().unwrap();
+            let table = ProjectTable::new(context.connection()).unwrap();
+            let mut dialog = KeybindsDialog::new(table.get_keybinds().unwrap());
             dialog.handle_key_event(key(KeyCode::Char('/')));
             dialog.handle_key_event(key(KeyCode::Char('d')));
             dialog.handle_key_event(key(KeyCode::Char('e')));

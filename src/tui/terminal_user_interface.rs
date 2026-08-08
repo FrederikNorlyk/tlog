@@ -142,7 +142,7 @@ impl<'a> TerminalUserInterface<'a> {
     fn show_keybind_dialog_for_active_widget(&mut self) -> Result<(), AppError> {
         let keybinds = match self.active_widget {
             ActiveWidget::SessionTable => SessionTable::get_keybinds()?,
-            ActiveWidget::ProjectTable => ProjectTable::get_keybinds()?,
+            ActiveWidget::ProjectTable => self.project_table.get_keybinds()?,
         };
 
         self.keybind_dialog = Some(KeybindsDialog::new(keybinds));
