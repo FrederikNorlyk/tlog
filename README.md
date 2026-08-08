@@ -50,7 +50,7 @@ The default locations are as follows
 - `%AppData%\FrederikNorlyk\tlog\data` for data
 - `%AppData%\FrederikNorlyk\tlog\config` for configuration
 
-### Configuration directory
+### Configuration
 
 The configuration directory stores a single TOML file called `tlog.toml`, used to control application behavior.
 
@@ -59,6 +59,10 @@ Example:
 ```toml
 time_format = "HoursMinutesSeconds"
 
+[issue_tracker]
+type = "jira"
+id_prefix = "PROJ-"
+
 [opener]
 url = "https://www.subdomain.atlassian.net/browse/%s"
 desc = "Open in Jira"
@@ -66,17 +70,21 @@ desc = "Open in Jira"
 
 Supported settings:
 
-- `time_format`: Controls how durations are displayed in the UI. 
-  - Supported values:`HoursMinutesSeconds`, `HoursMinutes`, `DecimalHours`, and `Seconds`.
-- `opener`: Optional configuration for opening the selected project in a browser using the `o` key.
-  - `url`: URL template. The `%s` placeholder is replaced with the name of the selected project.
-  - `desc`: Description displayed for the opener.
+| Setting                   | Type   | Description                                                                                                                        |
+|---------------------------|--------|------------------------------------------------------------------------------------------------------------------------------------|
+| `time_format`             | string | Controls how durations are displayed in the UI. Supported values: `HoursMinutesSeconds`, `HoursMinutes`, `DecimalHours`, `Seconds` |
+| `issue_tracker`           | table  | Optional configuration for fetching issue information when creating projects.                                                      |
+| `issue_tracker.type`      | string | Issue tracker to use. Supported values: `jira`.                                                                                    |
+| `issue_tracker.id_prefix` | string | Optional prefix added when querying issues. Example: `PROJ-` turns `1234` into `PROJ-1234`.                                        |
+| `opener`                  | table  | Optional configuration for opening the selected project in a browser using the `o` key.                                            |
+| `opener.url`              | string | URL template. `%s` is replaced with the selected issue/project name.                                                               |
+| `opener.desc`             | string | Description displayed for the opener.                                                                                              |
 
 #### Override config directory
 
 You can override the default config location by setting the environment variable `TLOG_CONFIG_DIR`.
 
-### Data directory
+### Data
 
 The data directory stores the SQLite database used for tracking time entries.
 

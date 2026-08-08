@@ -246,9 +246,7 @@ impl<'a> SessionTable<'a> {
         key_event: KeyEvent,
     ) -> Result<KeyEventResult, AppError> {
         let Some(project_select) = &mut self.project_select else {
-            return Err(AppError::InvalidState {
-                message: "No project select",
-            });
+            return Err(AppError::InvalidState("No project select"));
         };
 
         if key_event.code == KeyCode::Esc {
@@ -275,9 +273,7 @@ impl<'a> SessionTable<'a> {
         key_event: KeyEvent,
     ) -> Result<KeyEventResult, AppError> {
         let Some(dialog) = &mut self.manual_session_dialog else {
-            return Err(AppError::InvalidState {
-                message: "No project select",
-            });
+            return Err(AppError::InvalidState("No project select"));
         };
         match dialog.handle_key_event(key_event) {
             ManualSessionEvent::Save { total_seconds } => {
@@ -334,9 +330,7 @@ impl<'a> SessionTable<'a> {
 
     fn open_selected_project(&mut self) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState {
-                message: "No selected session",
-            });
+            return Err(AppError::InvalidState("No selected session"));
         };
 
         let config = Config::get()?;
@@ -365,9 +359,7 @@ impl<'a> SessionTable<'a> {
 
     fn toggle_session(&mut self) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState {
-                message: "No selected session",
-            });
+            return Err(AppError::InvalidState("No selected session"));
         };
 
         let tracking = Tracking::new(self.connection);
@@ -382,9 +374,7 @@ impl<'a> SessionTable<'a> {
         operation: TimeAdjustmentOperation,
     ) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState {
-                message: "No selected session",
-            });
+            return Err(AppError::InvalidState("No selected session"));
         };
 
         let tracking = Tracking::new(self.connection);
@@ -396,9 +386,7 @@ impl<'a> SessionTable<'a> {
 
     fn reset_session(&mut self) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState {
-                message: "No selected session",
-            });
+            return Err(AppError::InvalidState("No selected session"));
         };
 
         let tracking = Tracking::new(self.connection);
@@ -416,9 +404,7 @@ impl<'a> SessionTable<'a> {
 
     fn copy_to_clipboard(&mut self, copy_content: CopyContent) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState {
-                message: "No selected session",
-            });
+            return Err(AppError::InvalidState("No selected session"));
         };
 
         let text = match copy_content {
@@ -470,9 +456,7 @@ impl<'a> SessionTable<'a> {
 
     fn set_manual_session(&mut self, total_seconds: i64) -> Result<(), AppError> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState {
-                message: "No selected session",
-            });
+            return Err(AppError::InvalidState("No selected session"));
         };
 
         let tracking = Tracking::new(self.connection);
@@ -540,13 +524,7 @@ impl<'a> SessionTable<'a> {
         vec![
             " Use ".into(),
             "a".blue().bold(),
-            " to track a new project, ".into(),
-            "e".blue().bold(),
-            " to edit time, ".into(),
-            "d".blue().bold(),
-            " to delete, ".into(),
-            "space".blue().bold(),
-            " to toggle tracking".into(),
+            " to track a new project".into(),
         ]
     }
 }
@@ -649,10 +627,7 @@ mod tests {
 
         let joined = keybinds.join(" ");
 
-        assert_eq!(
-            joined,
-            " Use  a  to track a new project,  e  to edit time,  d  to delete,  space  to toggle tracking"
-        );
+        assert_eq!(joined, " Use  a  to track a new project");
     }
 
     mod render {

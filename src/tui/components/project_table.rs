@@ -1,8 +1,10 @@
 use crate::core::app_error::AppError;
-use crate::core::config::Config;
+use crate::core::config::{Config, ConfigMetadata};
+use crate::core::issue_tracker::IssueTracker;
 use crate::db::project_repository::ProjectRepository;
 use crate::model::project::Project;
 use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
+use crate::tui::components::issue_finder_form::{IssueFinderEvent, IssueFinderForm};
 use crate::tui::components::keybinds_dialog::Keybind;
 use crate::tui::components::project_form::{ProjectForm, ProjectFormEvent};
 use crate::tui::terminal_user_interface::KeyEventResult;
@@ -14,6 +16,7 @@ use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Row, StatefulWidget, Table, TableState, Widget};
 use rusqlite::Connection;
+use std::sync::Arc;
 
 pub struct ProjectTable<'a> {
     projects: Vec<Project>,
@@ -21,7 +24,9 @@ pub struct ProjectTable<'a> {
     connection: &'a Connection,
     is_showing_deletion_alert_dialog: bool,
     project_form: Option<ProjectForm<'a>>,
+    issue_finder_form: Option<IssueFinderForm<'a>>,
     table_height: u16,
+    config: ConfigMetadata,
 }
 
 impl<'a> ProjectTable<'a> {
@@ -45,7 +50,9 @@ impl<'a> ProjectTable<'a> {
             connection,
             is_showing_deletion_alert_dialog: false,
             project_form: None,
+            issue_finder_form: None,
             table_height: 0,
+            config: Config::get()?,
         })
     }
 
@@ -89,6 +96,10 @@ impl<'a> ProjectTable<'a> {
             form.render(area, buf);
         }
 
+        if let Some(form) = &mut self.issue_finder_form {
+            form.render(area, buf);
+        }
+
         if self.is_showing_deletion_alert_dialog {
             let dialog = AlertDialog::new("You are about to delete a project");
             dialog.render(area, buf);
@@ -102,78 +113,139 @@ impl<'a> ProjectTable<'a> {
     /// Returns an error if executing user commands fails.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, AppError> {
         if self.is_showing_deletion_alert_dialog {
-            match AlertDialog::handle_key_code(key_event.code) {
-                AlertDialogEvent::Confirm => {
-                    self.delete_project()?;
-                    self.is_showing_deletion_alert_dialog = false;
-                }
-                AlertDialogEvent::Cancel => {
-                    self.is_showing_deletion_alert_dialog = false;
-                }
-                AlertDialogEvent::Ignore => {}
-            }
-
-            return Ok(KeyEventResult::Consumed);
-        } else if let Some(form) = &mut self.project_form {
-            match form.handle_key_event(key_event) {
-                ProjectFormEvent::Create { name, description } => {
-                    self.insert_project(name.as_str(), description.as_deref())?;
-                    self.project_form = None;
-                }
-                ProjectFormEvent::Update {
-                    id,
-                    name,
-                    description,
-                } => {
-                    self.update_project(id, name.as_str(), description.as_deref())?;
-                    self.project_form = None;
-                }
-                ProjectFormEvent::Cancel => {
-                    self.project_form = None;
-                }
-                ProjectFormEvent::Consumed => {}
-            }
-
-            return Ok(KeyEventResult::Consumed);
+            return self.handle_deletion_alert_dialog_key_event(key_event);
+        } else if self.project_form.is_some() {
+            return self.handle_project_form_key_event(key_event);
+        } else if self.issue_finder_form.is_some() {
+            return self.handle_issue_finder_form_key_event(key_event);
         }
 
         let has_selected_project = self.get_selected_project().is_some();
         let half_page = self.table_height.saturating_sub(1) / 2;
         let ctrl_key_is_held = key_event.modifiers.contains(KeyModifiers::CONTROL);
 
-        let mut did_match = true;
+        if ctrl_key_is_held {
+            return match key_event.code {
+                KeyCode::Char('u') => {
+                    self.table_state.scroll_up_by(half_page);
+                    return Ok(KeyEventResult::Consumed);
+                }
+                KeyCode::Char('d') => {
+                    self.table_state.scroll_down_by(half_page);
+                    return Ok(KeyEventResult::Consumed);
+                }
+                _ => Ok(KeyEventResult::Unused),
+            };
+        }
+
+        if let Some(issue_tracker) = self.config.issue_tracker() {
+            match key_event.code {
+                KeyCode::Char('a') => {
+                    self.issue_finder_form =
+                        Some(IssueFinderForm::new(Arc::new(issue_tracker.clone())));
+                    return Ok(KeyEventResult::Consumed);
+                }
+                KeyCode::Char('A') => {
+                    self.project_form = Some(ProjectForm::new(None, None, None));
+                    return Ok(KeyEventResult::Consumed);
+                }
+                _ => {}
+            }
+        }
 
         match key_event.code {
+            KeyCode::Char('a') => self.project_form = Some(ProjectForm::new(None, None, None)),
             KeyCode::Char('j') | KeyCode::Down => self.table_state.select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.table_state.select_previous(),
-            KeyCode::Char('u') if ctrl_key_is_held => self.table_state.scroll_up_by(half_page),
-            KeyCode::Char('d') if ctrl_key_is_held => self.table_state.scroll_down_by(half_page),
             KeyCode::Char('o') if has_selected_project => self.open_selected_project()?,
             KeyCode::PageUp => self.table_state.scroll_up_by(self.table_height),
             KeyCode::PageDown => self.table_state.scroll_down_by(self.table_height),
             KeyCode::Char('g') | KeyCode::Home => self.table_state.select_first(),
             KeyCode::Char('G') | KeyCode::End => self.table_state.select_last(),
-            KeyCode::Char('a') => self.project_form = Some(ProjectForm::new(None, None, None)),
             KeyCode::Char('e') if has_selected_project => self.edit_project()?,
             KeyCode::Char('d') | KeyCode::Delete if has_selected_project => {
                 self.is_showing_deletion_alert_dialog = true;
             }
             KeyCode::Char('D') if has_selected_project => self.delete_project()?,
-            _ => did_match = false,
+            _ => return Ok(KeyEventResult::Unused),
         }
 
-        if did_match {
-            return Ok(KeyEventResult::Consumed);
+        Ok(KeyEventResult::Consumed)
+    }
+
+    fn handle_deletion_alert_dialog_key_event(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> Result<KeyEventResult, AppError> {
+        match AlertDialog::handle_key_code(key_event.code) {
+            AlertDialogEvent::Confirm => {
+                self.delete_project()?;
+                self.is_showing_deletion_alert_dialog = false;
+            }
+            AlertDialogEvent::Cancel => {
+                self.is_showing_deletion_alert_dialog = false;
+            }
+            AlertDialogEvent::Ignore => {}
         }
 
-        Ok(KeyEventResult::Unused)
+        Ok(KeyEventResult::Consumed)
+    }
+
+    fn handle_project_form_key_event(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> Result<KeyEventResult, AppError> {
+        let Some(form) = &mut self.project_form else {
+            return Err(AppError::InvalidState("No project form"));
+        };
+
+        match form.handle_key_event(key_event) {
+            ProjectFormEvent::Create { name, description } => {
+                self.insert_project(name.as_str(), description.as_deref())?;
+                self.project_form = None;
+            }
+            ProjectFormEvent::Update {
+                id,
+                name,
+                description,
+            } => {
+                self.update_project(id, name.as_str(), description.as_deref())?;
+                self.project_form = None;
+            }
+            ProjectFormEvent::Cancel => {
+                self.project_form = None;
+            }
+            ProjectFormEvent::Consumed => {}
+        }
+
+        Ok(KeyEventResult::Consumed)
+    }
+
+    fn handle_issue_finder_form_key_event(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> Result<KeyEventResult, AppError> {
+        let Some(form) = &mut self.issue_finder_form else {
+            return Err(AppError::InvalidState("No issue finder form"));
+        };
+
+        match form.handle_key_event(key_event) {
+            IssueFinderEvent::ProjectFound { project } => {
+                self.insert_project(project.name.as_str(), project.description.as_deref())?;
+                self.issue_finder_form = None;
+            }
+            IssueFinderEvent::Cancel => {
+                self.issue_finder_form = None;
+            }
+            IssueFinderEvent::Consumed => {}
+        }
+
+        Ok(KeyEventResult::Consumed)
     }
 
     fn delete_project(&mut self) -> Result<(), AppError> {
         let Some(project) = self.get_selected_project() else {
-            return Err(AppError::InvalidState {
-                message: "No selected project",
-            });
+            return Err(AppError::InvalidState("No selected project"));
         };
 
         let project_repository = ProjectRepository::new(self.connection);
@@ -185,14 +257,10 @@ impl<'a> ProjectTable<'a> {
 
     fn open_selected_project(&mut self) -> Result<(), AppError> {
         let Some(project) = self.get_selected_project() else {
-            return Err(AppError::InvalidState {
-                message: "No selected project",
-            });
+            return Err(AppError::InvalidState("No selected project"));
         };
 
-        let config = Config::get()?;
-
-        let Some(opener) = config.opener() else {
+        let Some(opener) = self.config.opener() else {
             return Ok(());
         };
 
@@ -203,9 +271,7 @@ impl<'a> ProjectTable<'a> {
 
     fn edit_project(&mut self) -> Result<(), AppError> {
         let Some(project) = self.get_selected_project() else {
-            return Err(AppError::InvalidState {
-                message: "No selected project",
-            });
+            return Err(AppError::InvalidState("No selected project"));
         };
 
         self.project_form = Some(ProjectForm::new(
@@ -263,9 +329,8 @@ impl<'a> ProjectTable<'a> {
     ///
     /// # Errors
     /// Returns an error if looking up the configuration fails
-    pub fn get_keybinds() -> Result<Vec<Keybind>, AppError> {
+    pub fn get_keybinds(&self) -> Result<Vec<Keybind>, AppError> {
         let mut binds = vec![
-            Keybind::new("a".to_string(), "Add a new project".to_string()),
             Keybind::new("e".to_string(), "Edit project".to_string()),
             Keybind::new("d".to_string(), "Delete project".to_string()),
             Keybind::new("delete".to_string(), "Delete project".to_string()),
@@ -284,9 +349,25 @@ impl<'a> ProjectTable<'a> {
             Keybind::new("page down".to_string(), "Scroll down a page".to_string()),
         ];
 
-        let config = Config::get()?;
+        if let Some(issue_tracker) = self.config.issue_tracker() {
+            let description = match issue_tracker {
+                IssueTracker::Jira { .. } => "Add from Jira",
+            };
 
-        if let Some(opener) = config.opener() {
+            binds.insert(0, Keybind::new("a".to_string(), description.to_string()));
+
+            binds.insert(
+                1,
+                Keybind::new("A".to_string(), "Manually add a new project".to_string()),
+            );
+        } else {
+            binds.insert(
+                0,
+                Keybind::new("a".to_string(), "Add a new project".to_string()),
+            );
+        }
+
+        if let Some(opener) = self.config.opener() {
             binds.push(Keybind::new(
                 "o".to_string(),
                 opener.description().to_string(),
@@ -301,11 +382,7 @@ impl<'a> ProjectTable<'a> {
         vec![
             " Use ".into(),
             "a".blue().bold(),
-            " to add, ".into(),
-            "e".blue().bold(),
-            " to edit, ".into(),
-            "d".blue().bold(),
-            " to delete".into(),
+            " to add a new project".into(),
         ]
     }
 }
@@ -339,7 +416,11 @@ mod tests {
 
     #[test]
     fn get_keybinds() {
-        let keybinds: Vec<String> = ProjectTable::get_keybinds()
+        let context = initialize_context();
+        let table = ProjectTable::new(context.connection()).unwrap();
+
+        let keybinds: Vec<String> = table
+            .get_keybinds()
             .unwrap()
             .iter()
             .map(|key| format!("{key}"))
@@ -362,7 +443,7 @@ mod tests {
 
         let joined = keybinds.join(" ");
 
-        assert_eq!(joined, " Use  a  to add,  e  to edit,  d  to delete");
+        assert_eq!(joined, " Use  a  to add a new project");
     }
 
     mod render {

@@ -12,8 +12,10 @@ pub enum AppError {
     Tracking(#[from] TrackingError),
     #[error("Clipboard error: {0}")]
     Clipboard(#[from] arboard::Error),
-    #[error("Invalid state: {message}")]
-    InvalidState { message: &'static str },
+    #[error("Invalid state: {0}")]
+    InvalidState(&'static str),
     #[error("Config error: {0}")]
     Config(#[from] ConfigError),
+    #[error("Error running system command: {0}")]
+    Command(String),
 }
