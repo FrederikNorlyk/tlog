@@ -524,13 +524,7 @@ impl<'a> SessionTable<'a> {
         vec![
             " Use ".into(),
             "a".blue().bold(),
-            " to track a new project, ".into(),
-            "e".blue().bold(),
-            " to edit time, ".into(),
-            "d".blue().bold(),
-            " to delete, ".into(),
-            "space".blue().bold(),
-            " to toggle tracking".into(),
+            " to track a new project".into(),
         ]
     }
 }
@@ -633,10 +627,7 @@ mod tests {
 
         let joined = keybinds.join(" ");
 
-        assert_eq!(
-            joined,
-            " Use  a  to track a new project,  e  to edit time,  d  to delete,  space  to toggle tracking"
-        );
+        assert_eq!(joined, " Use  a  to track a new project");
     }
 
     mod render {

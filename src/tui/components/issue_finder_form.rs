@@ -10,29 +10,30 @@ use ratatui::prelude::{Color, Widget};
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui_textarea::TextArea;
+use std::sync::Arc;
 
 pub struct IssueFinderForm<'a> {
-    name_text_area: TextArea<'a>,
+    id_text_area: TextArea<'a>,
     error_text: Option<String>,
-    issue_provider: Box<dyn IssueProvider>,
+    issue_provider: Arc<dyn IssueProvider>,
 }
 
 impl IssueFinderForm<'_> {
     #[must_use]
-    pub fn new(issue_provider: Box<dyn IssueProvider>) -> Self {
-        let mut name_text_area = TextArea::new(vec![]);
+    pub fn new(issue_provider: Arc<dyn IssueProvider>) -> Self {
+        let mut id_text_area = TextArea::new(vec![]);
 
-        name_text_area.set_style(Style::default().fg(Color::DarkGray));
+        id_text_area.set_style(Style::default().fg(Color::DarkGray));
 
-        name_text_area.set_block(
+        id_text_area.set_block(
             Block::default()
                 .border_style(Color::DarkGray)
                 .borders(Borders::ALL)
-                .title("Name"),
+                .title("Issue ID"),
         );
 
         Self {
-            name_text_area,
+            id_text_area,
             error_text: None,
             issue_provider,
         }
@@ -41,55 +42,55 @@ impl IssueFinderForm<'_> {
     /// Handle any key event from the user.
     ///
     /// # Errors
-    /// Returns an error is finding the issue using the configured issue tracker fails.
-    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<IssueFinderEvent, AppError> {
+    /// Returns an error if finding the issue using the configured issue tracker fails.
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> IssueFinderEvent {
         match key_event.code {
-            KeyCode::Esc => return Ok(IssueFinderEvent::Cancel),
+            KeyCode::Esc => return IssueFinderEvent::Cancel,
             KeyCode::Enter => {
                 let is_valid = self.validate_form();
 
                 if !is_valid {
-                    return Ok(IssueFinderEvent::Consumed);
+                    return IssueFinderEvent::Consumed;
                 }
 
-                match self.find_issue()? {
-                    Some(issue) => {
-                        return Ok(IssueFinderEvent::ProjectFound {
+                match self.find_issue() {
+                    Ok(Some(issue)) => {
+                        return IssueFinderEvent::ProjectFound {
                             project: issue.into(),
-                        });
+                        };
                     }
-                    None => self.error_text = Some("Could not find the issue".to_string()),
+                    Ok(None) => self.error_text = Some("Could not find the issue".to_string()),
+                    Err(e) => self.error_text = Some(e.to_string()),
                 }
             }
             _ => {
-                self.name_text_area.input(key_event);
+                self.id_text_area.input(key_event);
             }
         }
 
-        Ok(IssueFinderEvent::Consumed)
+        IssueFinderEvent::Consumed
     }
 
     fn validate_form(&mut self) -> bool {
         let mut is_valid = true;
 
-        let Some(block) = self.name_text_area.block().cloned() else {
+        let Some(block) = self.id_text_area.block().cloned() else {
             return false;
         };
 
-        if self.get_name_value().is_empty() {
+        if self.get_field_value().is_empty() {
             is_valid = false;
-            self.name_text_area
-                .set_block(block.border_style(Color::Red));
+            self.id_text_area.set_block(block.border_style(Color::Red));
         } else {
-            self.name_text_area
+            self.id_text_area
                 .set_block(block.border_style(Color::DarkGray));
         }
 
         is_valid
     }
 
-    fn get_name_value(&self) -> String {
-        self.name_text_area
+    fn get_field_value(&self) -> String {
+        self.id_text_area
             .lines()
             .first()
             .map_or("", String::as_str)
@@ -98,9 +99,9 @@ impl IssueFinderForm<'_> {
     }
 
     fn find_issue(&self) -> Result<Option<Issue>, AppError> {
-        let name = self.get_name_value();
+        let issue_id = self.get_field_value();
 
-        let Some(issue) = self.issue_provider.fetch_issue(name.as_str())? else {
+        let Some(issue) = self.issue_provider.fetch_issue(issue_id.as_str())? else {
             return Ok(None);
         };
 
@@ -118,7 +119,7 @@ impl Widget for &IssueFinderForm<'_> {
             .constraints([Constraint::Length(3), Constraint::Fill(1)])
             .split(inner);
 
-        self.name_text_area.render(chunks[0], buf);
+        self.id_text_area.render(chunks[0], buf);
 
         if let Some(error) = self.error_text.as_ref() {
             Paragraph::new(error.as_str()).render(chunks[1], buf);
@@ -142,13 +143,13 @@ mod tests {
     }
 
     impl IssueProvider for MockIssueTracker {
-        fn fetch_issue(&self, _name: &str) -> Result<Option<Issue>, AppError> {
+        fn fetch_issue(&self, _id: &str) -> Result<Option<Issue>, AppError> {
             Ok(self.issue.clone())
         }
     }
 
     fn create_form(issue: Option<Issue>) -> IssueFinderForm<'static> {
-        IssueFinderForm::new(Box::new(MockIssueTracker { issue }))
+        IssueFinderForm::new(Arc::new(MockIssueTracker { issue }))
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -161,18 +162,18 @@ mod tests {
 
         assert!(!form.validate_form());
 
-        form.name_text_area.insert_str("TEST-123");
+        form.id_text_area.insert_str("TEST-123");
 
         assert!(form.validate_form());
     }
 
     #[test]
-    fn get_name_value() {
+    fn get_field_value() {
         let mut form = create_form(None);
 
-        form.name_text_area.insert_str("  TEST-123  ");
+        form.id_text_area.insert_str("  TEST-123  ");
 
-        assert_eq!(form.get_name_value(), "TEST-123");
+        assert_eq!(form.get_field_value(), "TEST-123");
     }
 
     #[test]
@@ -196,19 +197,18 @@ mod tests {
         #[test]
         fn escape_closes() {
             let mut form = create_form(None);
+            let event = form.handle_key_event(key(KeyCode::Esc));
 
-            let result = form.handle_key_event(key(KeyCode::Esc));
-
-            assert!(matches!(result.unwrap(), IssueFinderEvent::Cancel));
+            assert!(matches!(event, IssueFinderEvent::Cancel));
         }
 
         #[test]
         fn type_into_text_area() {
             let mut form = create_form(None);
+            let event = form.handle_key_event(key(KeyCode::Char('A')));
 
-            form.handle_key_event(key(KeyCode::Char('A'))).unwrap();
-
-            assert_eq!(form.get_name_value(), "A");
+            assert!(matches!(event, IssueFinderEvent::Consumed));
+            assert_eq!(form.get_field_value(), "A");
         }
 
         mod enter_submits {
@@ -217,10 +217,9 @@ mod tests {
             #[test]
             fn empty_text_area_is_invalid() {
                 let mut form = create_form(None);
+                let event = form.handle_key_event(key(KeyCode::Enter));
 
-                let result = form.handle_key_event(key(KeyCode::Enter)).unwrap();
-
-                assert!(matches!(result, IssueFinderEvent::Consumed));
+                assert!(matches!(event, IssueFinderEvent::Consumed));
                 assert!(form.error_text.is_none());
             }
 
@@ -228,11 +227,11 @@ mod tests {
             fn issue_not_found() {
                 let mut form = create_form(None);
 
-                form.name_text_area.insert_str("TEST-123");
+                form.id_text_area.insert_str("TEST-123");
 
-                let result = form.handle_key_event(key(KeyCode::Enter)).unwrap();
+                let event = form.handle_key_event(key(KeyCode::Enter));
 
-                assert!(matches!(result, IssueFinderEvent::Consumed));
+                assert!(matches!(event, IssueFinderEvent::Consumed));
 
                 assert_eq!(
                     form.error_text,
@@ -249,11 +248,11 @@ mod tests {
 
                 let mut form = create_form(Some(issue));
 
-                form.name_text_area.insert_str("TEST-123");
+                form.id_text_area.insert_str("TEST-123");
 
-                let result = form.handle_key_event(key(KeyCode::Enter)).unwrap();
+                let event = form.handle_key_event(key(KeyCode::Enter));
 
-                assert!(matches!(result, IssueFinderEvent::ProjectFound { .. }));
+                assert!(matches!(event, IssueFinderEvent::ProjectFound { .. }));
             }
         }
     }
@@ -273,7 +272,7 @@ mod tests {
 
             let expected = vec![
                 "   ┌─────────────────────────────────────────────── Esc ┐   ",
-                "   │┌Name──────────────────────────────────────────────┐│   ",
+                "   │┌Issue ID──────────────────────────────────────────┐│   ",
                 "   ││                                                  ││   ",
                 "   │└──────────────────────────────────────────────────┘│   ",
                 "   │                                                    │   ",
@@ -291,7 +290,7 @@ mod tests {
         fn with_text() {
             let mut form = create_form(None);
 
-            form.name_text_area.insert_str("PROJ-123");
+            form.id_text_area.insert_str("PROJ-123");
 
             let area = Rect::new(0, 0, 60, 10);
             let mut buf = Buffer::empty(area);
@@ -300,7 +299,7 @@ mod tests {
 
             let expected = vec![
                 "   ┌─────────────────────────────────────────────── Esc ┐   ",
-                "   │┌Name──────────────────────────────────────────────┐│   ",
+                "   │┌Issue ID──────────────────────────────────────────┐│   ",
                 "   ││PROJ-123                                          ││   ",
                 "   │└──────────────────────────────────────────────────┘│   ",
                 "   │                                                    │   ",
@@ -327,7 +326,7 @@ mod tests {
 
             let expected = vec![
                 "   ┌─────────────────────────────────────────────── Esc ┐   ",
-                "   │┌Name──────────────────────────────────────────────┐│   ",
+                "   │┌Issue ID──────────────────────────────────────────┐│   ",
                 "   ││                                                  ││   ",
                 "   │└──────────────────────────────────────────────────┘│   ",
                 "   │Could not find the issue                            │   ",

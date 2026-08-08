@@ -185,7 +185,7 @@ impl Widget for &mut TerminalUserInterface<'_> {
         };
 
         spans.extend([
-            ", and ".into(),
+            ". Use ".into(),
             "?".blue().bold(),
             " to show keybinds ".into(),
         ]);
@@ -401,7 +401,7 @@ mod tests {
                 Box::new(MockClipboard::default()),
             )
             .unwrap();
-            let hint_text = " Use a to track a new project, e to edit time, d to delete, space to toggle tracking, and ? to show keybinds";
+            let hint_text = " Use a to track a new project. Use ? to show keybinds";
 
             let expected = vec![
                 "┏ [1] Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┏ [2] Today ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
@@ -426,7 +426,7 @@ mod tests {
                 Box::new(MockClipboard::default()),
             )
             .unwrap();
-            let hint_text = " Use a to add, e to edit, d to delete, and ? to show keybinds";
+            let hint_text = " Use a to add a new project. Use ? to show keybinds";
 
             // Select the project table
             tui.handle_key_event(key(KeyCode::Char('1'))).unwrap();
@@ -454,7 +454,7 @@ mod tests {
                 Box::new(MockClipboard::default()),
             )
             .unwrap();
-            let hint_text = " Use a to track a new project, e to edit time, d to delete, space to toggle tracking, and ? to show keybinds";
+            let hint_text = " Use a to track a new project. Use ? to show keybinds";
 
             let expected = vec![
                 "┏ [1] Projects ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┏ [2] Today ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",

@@ -15,9 +15,9 @@ pub enum IssueTracker {
 }
 
 impl IssueProvider for IssueTracker {
-    fn fetch_issue(&self, name: &str) -> Result<Option<Issue>, AppError> {
+    fn fetch_issue(&self, id: &str) -> Result<Option<Issue>, AppError> {
         match self {
-            Self::Jira { id_prefix } => JiraCLI::fetch_issue(name, id_prefix.as_deref()),
+            Self::Jira { id_prefix } => JiraCLI::fetch_issue(id, id_prefix.as_deref()),
         }
     }
 }

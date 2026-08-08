@@ -6,5 +6,5 @@ pub trait IssueProvider {
     ///
     /// # Errors
     /// Returns an error if the issue tracker fails to fetch the issue
-    fn fetch_issue(&self, name: &str) -> Result<Option<Issue>, AppError>;
+    fn fetch_issue(&self, id: &str) -> Result<Option<Issue>, AppError>;
 }
