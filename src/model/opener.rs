@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Opener {
     #[serde(rename = "url")]
     url_template: String,
@@ -30,6 +31,14 @@ impl Opener {
     #[must_use]
     pub fn build_url(&self, replacement: &str) -> String {
         self.url_template.replace("%s", replacement)
+    }
+}
+
+impl Display for Opener {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let url = self.url_template.as_str();
+        let desc = self.description.as_str();
+        write!(f, "Description: {desc}\nURL: {url}")
     }
 }
 

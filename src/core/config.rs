@@ -33,6 +33,19 @@ impl Config {
         Ok(())
     }
 
+    /// Sets the app's opener
+    ///
+    /// # Errors
+    /// Returns an error if reading or writing to files failed.
+    pub fn set_opener(opener: Option<Opener>) -> Result<(), ConfigError> {
+        let mut config = Config::get()?;
+        config.opener = opener;
+
+        Self::write(&config)?;
+
+        Ok(())
+    }
+
     /// Returns the path to the app's configuration file.
     /// If the file doesn't exist, it attempts to create it.
     ///
@@ -115,6 +128,8 @@ pub enum ConfigError {
     TomlDeserialize(#[from] toml::de::Error),
     #[error("Toml serialization error: {0}")]
     TomlSerialize(#[from] toml::ser::Error),
+    #[error("{0} is required")]
+    RequiredFieldMissing(&'static str),
 }
 
 #[cfg(test)]

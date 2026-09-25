@@ -1,9 +1,9 @@
 use clap::Parser;
-use std::error::Error;
 use time::OffsetDateTime;
 use tlog::cli::commands::{Cli, Command};
-use tlog::cli::config_command::ConfigCommand;
+use tlog::cli::config_command::handle_config_command;
 use tlog::cli::project_command::handle_project_command;
+use tlog::core::app_error::AppError;
 use tlog::core::clipboard::system_clipboard::SystemClipboard;
 use tlog::core::config::Config;
 use tlog::core::time_format::TimeFormat;
@@ -13,7 +13,7 @@ use tlog::db::project_repository::ProjectRepository;
 use tlog::model::session::Session;
 use tlog::tui::terminal_user_interface::TerminalUserInterface;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), AppError> {
     let database = Database::new()?;
     database.init()?;
 
@@ -34,7 +34,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::Project { command } => {
             let mut stdout = std::io::stdout();
             let project_repository = ProjectRepository::new(database.connection());
-            handle_project_command(command, &project_repository, &mut stdout)?;
+            handle_project_command(command, &project_repository, &mut stdout)
+                .map_err(|e| AppError::General(format!("{e}")))?;
         }
         Command::Start { project_id } => {
             let tracking = Tracking::new(database.connection());
@@ -79,26 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             println!("{BOLD}{duration:10}      Total{RESET}");
         }
-        Command::Config { command } => match command {
-            ConfigCommand::Where => {
-                let database_path = database
-                    .connection()
-                    .path()
-                    .ok_or_else(|| std::io::Error::other("Database connection has no path"))?;
-
-                println!("Database: {database_path}");
-
-                let config_path = Config::get_or_create_file_path()?;
-                println!("Config: {}", config_path.display());
-            }
-            ConfigCommand::TimeFormat { value } => {
-                if let Some(time_format) = value {
-                    Config::set_time_format(time_format)?;
-                } else {
-                    println!("Time format: {:?}", Config::get()?.time_format());
-                }
-            }
-        },
+        Command::Config { command } => handle_config_command(command, &database, &config)?,
     }
 
     Ok(())
