@@ -1,3 +1,4 @@
+use crate::core::issue_tracker::IssueTracker;
 use crate::core::paths::Paths;
 use crate::core::time_format::TimeFormat;
 use crate::model::opener::Opener;
@@ -26,6 +27,19 @@ impl Config {
     pub fn set_time_format(time_format: TimeFormat) -> Result<(), ConfigError> {
         let mut config = Config::get()?;
         config.time_format = time_format;
+
+        Self::write(&config)?;
+
+        Ok(())
+    }
+
+    /// Sets the app's opener
+    ///
+    /// # Errors
+    /// Returns an error if reading or writing to files failed.
+    pub fn set_opener(opener: Option<Opener>) -> Result<(), ConfigError> {
+        let mut config = Config::get()?;
+        config.opener = opener;
 
         Self::write(&config)?;
 
@@ -72,6 +86,7 @@ impl Config {
 pub struct ConfigMetadata {
     time_format: TimeFormat,
     opener: Option<Opener>,
+    issue_tracker: Option<IssueTracker>,
 }
 
 impl Default for ConfigMetadata {
@@ -79,6 +94,7 @@ impl Default for ConfigMetadata {
         Self {
             time_format: TimeFormat::HoursMinutesSeconds,
             opener: None,
+            issue_tracker: None,
         }
     }
 }
@@ -92,6 +108,11 @@ impl ConfigMetadata {
     #[must_use]
     pub fn opener(&self) -> &Option<Opener> {
         &self.opener
+    }
+
+    #[must_use]
+    pub fn issue_tracker(&self) -> &Option<IssueTracker> {
+        &self.issue_tracker
     }
 }
 
@@ -107,6 +128,8 @@ pub enum ConfigError {
     TomlDeserialize(#[from] toml::de::Error),
     #[error("Toml serialization error: {0}")]
     TomlSerialize(#[from] toml::ser::Error),
+    #[error("{0} is required")]
+    RequiredFieldMissing(&'static str),
 }
 
 #[cfg(test)]
@@ -172,10 +195,7 @@ mod tests {
             let mut config = Config::get().unwrap();
             config.time_format = TimeFormat::Seconds;
 
-            config.opener = Some(Opener::new(
-                "https://www.test.site/search/%s",
-                "Open in browser",
-            ));
+            config.opener = Some(Opener::new("https://www.test.site/search/%s", "Test"));
 
             Config::write(&config).unwrap();
 
@@ -184,7 +204,7 @@ mod tests {
 
             assert_eq!(TimeFormat::Seconds, config.time_format);
             assert_eq!("https://www.test.site/search/%s", opener.url_template());
-            assert_eq!("Open in browser", opener.description());
+            assert_eq!("Test", opener.name());
 
             teardown();
         }

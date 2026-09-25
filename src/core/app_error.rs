@@ -1,9 +1,12 @@
 use crate::core::config::ConfigError;
 use crate::core::tracking::TrackingError;
+use crate::db::database::DatabaseError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error("{0}")]
+    General(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("SQLite error: {0}")]
@@ -12,8 +15,12 @@ pub enum AppError {
     Tracking(#[from] TrackingError),
     #[error("Clipboard error: {0}")]
     Clipboard(#[from] arboard::Error),
-    #[error("Invalid state: {message}")]
-    InvalidState { message: &'static str },
+    #[error("Invalid state: {0}")]
+    InvalidState(&'static str),
     #[error("Config error: {0}")]
     Config(#[from] ConfigError),
+    #[error("Error running system command: {0}")]
+    Command(String),
+    #[error("DB error: {0}")]
+    Database(#[from] DatabaseError),
 }
