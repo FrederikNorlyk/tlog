@@ -102,3 +102,347 @@ fn unwrap_or_get_existing_description(
         Err(ConfigError::RequiredFieldMissing("description"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Debug, Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    }
+
+    fn parse(args: &[&str]) -> ConfigCommand {
+        TestCli::try_parse_from(args).unwrap().command
+    }
+
+    mod parsing {
+        use super::*;
+
+        #[test]
+        fn where_command() {
+            assert!(matches!(parse(&["tlog", "where"]), ConfigCommand::Where));
+        }
+
+        mod time_format {
+            use super::*;
+
+            #[test]
+            fn without_value() {
+                assert!(matches!(
+                    parse(&["tlog", "time-format"]),
+                    ConfigCommand::TimeFormat { value: None }
+                ));
+            }
+
+            #[test]
+            fn supported_values() {
+                for (argument, expected) in [
+                    ("seconds", TimeFormat::Seconds),
+                    ("hours-minutes", TimeFormat::HoursMinutes),
+                    ("hours-minutes-seconds", TimeFormat::HoursMinutesSeconds),
+                    ("decimal-hours", TimeFormat::DecimalHours),
+                ] {
+                    assert!(matches!(
+                        parse(&["tlog", "time-format", argument]),
+                        ConfigCommand::TimeFormat { value: Some(actual) } if actual == expected
+                    ));
+                }
+            }
+
+            #[test]
+            fn rejects_unknown_value() {
+                let error =
+                    TestCli::try_parse_from(["tlog", "time-format", "minutes"]).unwrap_err();
+
+                assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+            }
+        }
+
+        mod opener {
+            use super::*;
+
+            #[test]
+            fn without_options() {
+                assert!(matches!(
+                    parse(&["tlog", "opener"]),
+                    ConfigCommand::Opener {
+                        url: None,
+                        description: None
+                    }
+                ));
+            }
+
+            #[test]
+            fn url_only() {
+                assert!(matches!(
+                    parse(&["tlog", "opener", "--url", "https://example.com/%s"]),
+                    ConfigCommand::Opener { url: Some(url), description: None }
+                        if url == "https://example.com/%s"
+                ));
+            }
+
+            #[test]
+            fn description_and_alias() {
+                for flag in ["--description", "--desc"] {
+                    assert!(matches!(
+                        parse(&["tlog", "opener", flag, "Open issue"]),
+                        ConfigCommand::Opener { url: None, description: Some(description) }
+                            if description == "Open issue"
+                    ));
+                }
+            }
+
+            #[test]
+            fn both_options() {
+                assert!(matches!(
+                    parse(&["tlog", "opener", "--url", "https://example.com/%s", "--desc", "Open issue"]),
+                    ConfigCommand::Opener { url: Some(url), description: Some(description) }
+                        if url == "https://example.com/%s" && description == "Open issue"
+                ));
+            }
+        }
+    }
+
+    mod handle_config_command {
+        use super::*;
+        use crate::core::constants::CONFIG_DIR_ENV;
+        use serial_test::serial;
+        use std::ffi::OsString;
+
+        struct TestContext {
+            directory: tempfile::TempDir,
+            previous_config_dir: Option<OsString>,
+            database: Database,
+        }
+
+        impl TestContext {
+            // Call only from tests holding the shared serial_test lock, like the
+            // existing config and paths tests that modify this environment variable.
+            #[allow(unsafe_code)]
+            fn new() -> Self {
+                let directory = tempfile::tempdir().unwrap();
+                let database = Database::new_in_memory_db().unwrap();
+                let previous_config_dir = std::env::var_os(CONFIG_DIR_ENV);
+                unsafe {
+                    std::env::set_var(CONFIG_DIR_ENV, directory.path());
+                }
+                Self {
+                    directory,
+                    previous_config_dir,
+                    database,
+                }
+            }
+
+            fn run(&self, command: ConfigCommand) -> Result<(), AppError> {
+                handle_config_command(command, &self.database, &Config::get()?)
+            }
+
+            fn contents(&self) -> String {
+                std::fs::read_to_string(self.directory.path().join("tlog.toml")).unwrap()
+            }
+        }
+
+        impl Drop for TestContext {
+            #[allow(unsafe_code)]
+            fn drop(&mut self) {
+                unsafe {
+                    if let Some(previous) = &self.previous_config_dir {
+                        std::env::set_var(CONFIG_DIR_ENV, previous);
+                    } else {
+                        std::env::remove_var(CONFIG_DIR_ENV);
+                    }
+                }
+            }
+        }
+
+        mod where_command {
+            use super::*;
+
+            #[test]
+            #[serial]
+            fn creates_missing_configuration() {
+                let context = TestContext::new();
+                let path = context.directory.path().join("tlog.toml");
+                assert!(!path.exists());
+
+                handle_config_command(
+                    ConfigCommand::Where,
+                    &context.database,
+                    &ConfigMetadata::default(),
+                )
+                .unwrap();
+
+                assert!(path.is_file());
+                assert_eq!(
+                    Config::get().unwrap().time_format(),
+                    TimeFormat::HoursMinutesSeconds
+                );
+            }
+        }
+
+        mod time_format {
+            use super::*;
+
+            #[test]
+            #[serial]
+            fn saves_value_and_preserves_opener() {
+                let context = TestContext::new();
+                Config::set_opener(Some(Opener::new("https://example.com/%s", "Open issue")))
+                    .unwrap();
+
+                context
+                    .run(ConfigCommand::TimeFormat {
+                        value: Some(TimeFormat::DecimalHours),
+                    })
+                    .unwrap();
+
+                let config = Config::get().unwrap();
+                assert_eq!(config.time_format(), TimeFormat::DecimalHours);
+                let opener = config.opener().as_ref().unwrap();
+                assert_eq!(opener.url_template(), "https://example.com/%s");
+                assert_eq!(opener.description(), "Open issue");
+            }
+
+            #[test]
+            #[serial]
+            fn query_preserves_configuration() {
+                let context = TestContext::new();
+                Config::set_time_format(TimeFormat::Seconds).unwrap();
+                let before = context.contents();
+
+                context
+                    .run(ConfigCommand::TimeFormat { value: None })
+                    .unwrap();
+
+                assert_eq!(context.contents(), before);
+            }
+
+            #[test]
+            #[serial]
+            fn propagates_invalid_configuration() {
+                let context = TestContext::new();
+                std::fs::write(context.directory.path().join("tlog.toml"), "invalid = [").unwrap();
+
+                let result = handle_config_command(
+                    ConfigCommand::TimeFormat {
+                        value: Some(TimeFormat::Seconds),
+                    },
+                    &context.database,
+                    &ConfigMetadata::default(),
+                );
+
+                assert!(matches!(
+                    result,
+                    Err(AppError::Config(ConfigError::TomlDeserialize(_)))
+                ));
+            }
+        }
+
+        mod opener {
+            use super::*;
+
+            #[test]
+            #[serial]
+            fn creates_opener_and_preserves_time_format() {
+                let context = TestContext::new();
+                Config::set_time_format(TimeFormat::Seconds).unwrap();
+
+                context
+                    .run(ConfigCommand::Opener {
+                        url: Some("https://example.com/%s".into()),
+                        description: Some("Open issue".into()),
+                    })
+                    .unwrap();
+
+                let config = Config::get().unwrap();
+                assert_eq!(config.time_format(), TimeFormat::Seconds);
+                let opener = config.opener().as_ref().unwrap();
+                assert_eq!(opener.url_template(), "https://example.com/%s");
+                assert_eq!(opener.description(), "Open issue");
+            }
+
+            #[test]
+            #[serial]
+            fn updates_provided_fields_and_keeps_omitted_fields() {
+                let context = TestContext::new();
+                for (url, description, expected_url, expected_description) in [
+                    (
+                        Some("https://new.example/%s"),
+                        None,
+                        "https://new.example/%s",
+                        "Original",
+                    ),
+                    (None, Some("Updated"), "https://old.example/%s", "Updated"),
+                    (
+                        Some("https://new.example/%s"),
+                        Some("Updated"),
+                        "https://new.example/%s",
+                        "Updated",
+                    ),
+                ] {
+                    Config::set_opener(Some(Opener::new("https://old.example/%s", "Original")))
+                        .unwrap();
+
+                    context
+                        .run(ConfigCommand::Opener {
+                            url: url.map(str::to_owned),
+                            description: description.map(str::to_owned),
+                        })
+                        .unwrap();
+
+                    let config = Config::get().unwrap();
+                    let opener = config.opener().as_ref().unwrap();
+                    assert_eq!(opener.url_template(), expected_url);
+                    assert_eq!(opener.description(), expected_description);
+                }
+            }
+
+            #[test]
+            #[serial]
+            fn creating_opener_requires_both_fields() {
+                let context = TestContext::new();
+                Config::get().unwrap();
+                let before = context.contents();
+                for (url, description, missing_field) in [
+                    (Some("https://example.com/%s"), None, "description"),
+                    (None, Some("Open issue"), "url"),
+                ] {
+                    let result = context.run(ConfigCommand::Opener {
+                        url: url.map(str::to_owned),
+                        description: description.map(str::to_owned),
+                    });
+
+                    assert!(matches!(result,
+                        Err(AppError::Config(ConfigError::RequiredFieldMissing(field))) if field == missing_field
+                    ));
+                    assert_eq!(context.contents(), before);
+                }
+            }
+
+            #[test]
+            #[serial]
+            fn query_preserves_configuration_with_or_without_opener() {
+                let context = TestContext::new();
+                for opener in [
+                    None,
+                    Some(Opener::new("https://example.com/%s", "Open issue")),
+                ] {
+                    Config::set_opener(opener).unwrap();
+                    let before = context.contents();
+
+                    context
+                        .run(ConfigCommand::Opener {
+                            url: None,
+                            description: None,
+                        })
+                        .unwrap();
+
+                    assert_eq!(context.contents(), before);
+                }
+            }
+        }
+    }
+}
