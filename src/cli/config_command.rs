@@ -15,8 +15,8 @@ pub enum ConfigCommand {
     Opener {
         #[arg(long)]
         url: Option<String>,
-        #[arg(long, alias = "desc")]
-        description: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
     },
 }
 
@@ -52,8 +52,8 @@ pub fn handle_config_command(
                 println!("Time format: {:?}", config.time_format());
             }
         }
-        ConfigCommand::Opener { url, description } => {
-            if url.is_none() && description.is_none() {
+        ConfigCommand::Opener { url, name } => {
+            if url.is_none() && name.is_none() {
                 if let Some(opener) = config.opener() {
                     println!("{opener}");
                 } else {
@@ -64,10 +64,9 @@ pub fn handle_config_command(
 
             let url = unwrap_or_get_existing_url(url, config.opener().as_ref())?;
 
-            let description =
-                unwrap_or_get_existing_description(description, config.opener().as_ref())?;
+            let name = unwrap_or_get_existing_name(name, config.opener().as_ref())?;
 
-            let new_opener = Opener::new(url, description);
+            let new_opener = Opener::new(url, name);
             Config::set_opener(Some(new_opener))?;
         }
     }
@@ -89,17 +88,17 @@ fn unwrap_or_get_existing_url(
     }
 }
 
-fn unwrap_or_get_existing_description(
-    description: Option<String>,
+fn unwrap_or_get_existing_name(
+    name: Option<String>,
     opener: Option<&Opener>,
 ) -> Result<String, ConfigError> {
-    if let Some(description) = description {
-        Ok(description)
+    if let Some(name) = name {
+        Ok(name)
     } else if let Some(opener) = opener {
-        Ok(opener.description().to_string())
+        Ok(opener.name().to_string())
     } else {
         // If no opener exists, both parameters are required
-        Err(ConfigError::RequiredFieldMissing("description"))
+        Err(ConfigError::RequiredFieldMissing("name"))
     }
 }
 
@@ -170,7 +169,7 @@ mod tests {
                     parse(&["tlog", "opener"]),
                     ConfigCommand::Opener {
                         url: None,
-                        description: None
+                        name: None
                     }
                 ));
             }
@@ -179,28 +178,26 @@ mod tests {
             fn url_only() {
                 assert!(matches!(
                     parse(&["tlog", "opener", "--url", "https://example.com/%s"]),
-                    ConfigCommand::Opener { url: Some(url), description: None }
+                    ConfigCommand::Opener { url: Some(url), name: None }
                         if url == "https://example.com/%s"
                 ));
             }
 
             #[test]
-            fn description_and_alias() {
-                for flag in ["--description", "--desc"] {
-                    assert!(matches!(
-                        parse(&["tlog", "opener", flag, "Open issue"]),
-                        ConfigCommand::Opener { url: None, description: Some(description) }
-                            if description == "Open issue"
-                    ));
-                }
+            fn name() {
+                assert!(matches!(
+                    parse(&["tlog", "opener", "--name", "Test"]),
+                    ConfigCommand::Opener { url: None, name: Some(name) }
+                        if name == "Test"
+                ));
             }
 
             #[test]
             fn both_options() {
                 assert!(matches!(
-                    parse(&["tlog", "opener", "--url", "https://example.com/%s", "--desc", "Open issue"]),
-                    ConfigCommand::Opener { url: Some(url), description: Some(description) }
-                        if url == "https://example.com/%s" && description == "Open issue"
+                    parse(&["tlog", "opener", "--url", "https://example.com/%s", "--name", "Some name"]),
+                    ConfigCommand::Opener { url: Some(url), name: Some(name) }
+                        if url == "https://example.com/%s" && name == "Some name"
                 ));
             }
         }
@@ -290,8 +287,7 @@ mod tests {
             #[serial]
             fn saves_value_and_preserves_opener() {
                 let context = TestContext::new();
-                Config::set_opener(Some(Opener::new("https://example.com/%s", "Open issue")))
-                    .unwrap();
+                Config::set_opener(Some(Opener::new("https://example.com/%s", "Example"))).unwrap();
 
                 context
                     .run(ConfigCommand::TimeFormat {
@@ -303,7 +299,7 @@ mod tests {
                 assert_eq!(config.time_format(), TimeFormat::DecimalHours);
                 let opener = config.opener().as_ref().unwrap();
                 assert_eq!(opener.url_template(), "https://example.com/%s");
-                assert_eq!(opener.description(), "Open issue");
+                assert_eq!(opener.name(), "Example");
             }
 
             #[test]
@@ -353,7 +349,7 @@ mod tests {
                 context
                     .run(ConfigCommand::Opener {
                         url: Some("https://example.com/%s".into()),
-                        description: Some("Open issue".into()),
+                        name: Some("Example".into()),
                     })
                     .unwrap();
 
@@ -361,14 +357,14 @@ mod tests {
                 assert_eq!(config.time_format(), TimeFormat::Seconds);
                 let opener = config.opener().as_ref().unwrap();
                 assert_eq!(opener.url_template(), "https://example.com/%s");
-                assert_eq!(opener.description(), "Open issue");
+                assert_eq!(opener.name(), "Example");
             }
 
             #[test]
             #[serial]
             fn updates_provided_fields_and_keeps_omitted_fields() {
                 let context = TestContext::new();
-                for (url, description, expected_url, expected_description) in [
+                for (url, name, expected_url, expected_name) in [
                     (
                         Some("https://new.example/%s"),
                         None,
@@ -389,14 +385,14 @@ mod tests {
                     context
                         .run(ConfigCommand::Opener {
                             url: url.map(str::to_owned),
-                            description: description.map(str::to_owned),
+                            name: name.map(str::to_owned),
                         })
                         .unwrap();
 
                     let config = Config::get().unwrap();
                     let opener = config.opener().as_ref().unwrap();
                     assert_eq!(opener.url_template(), expected_url);
-                    assert_eq!(opener.description(), expected_description);
+                    assert_eq!(opener.name(), expected_name);
                 }
             }
 
@@ -406,13 +402,13 @@ mod tests {
                 let context = TestContext::new();
                 Config::get().unwrap();
                 let before = context.contents();
-                for (url, description, missing_field) in [
-                    (Some("https://example.com/%s"), None, "description"),
-                    (None, Some("Open issue"), "url"),
+                for (url, name, missing_field) in [
+                    (Some("https://example.com/%s"), None, "name"),
+                    (None, Some("Example"), "url"),
                 ] {
                     let result = context.run(ConfigCommand::Opener {
                         url: url.map(str::to_owned),
-                        description: description.map(str::to_owned),
+                        name: name.map(str::to_owned),
                     });
 
                     assert!(matches!(result,
@@ -436,7 +432,7 @@ mod tests {
                     context
                         .run(ConfigCommand::Opener {
                             url: None,
-                            description: None,
+                            name: None,
                         })
                         .unwrap();
 

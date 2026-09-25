@@ -195,10 +195,7 @@ mod tests {
             let mut config = Config::get().unwrap();
             config.time_format = TimeFormat::Seconds;
 
-            config.opener = Some(Opener::new(
-                "https://www.test.site/search/%s",
-                "Open in browser",
-            ));
+            config.opener = Some(Opener::new("https://www.test.site/search/%s", "Test"));
 
             Config::write(&config).unwrap();
 
@@ -207,7 +204,7 @@ mod tests {
 
             assert_eq!(TimeFormat::Seconds, config.time_format);
             assert_eq!("https://www.test.site/search/%s", opener.url_template());
-            assert_eq!("Open in browser", opener.description());
+            assert_eq!("Test", opener.name());
 
             teardown();
         }

@@ -65,7 +65,7 @@ id_prefix = "PROJ-"
 
 [opener]
 url = "https://www.subdomain.atlassian.net/browse/%s"
-desc = "Open in Jira"
+name = "Jira"
 ```
 
 Supported settings:
@@ -78,7 +78,7 @@ Supported settings:
 | `issue_tracker.id_prefix` | string | Optional prefix added when querying issues. Example: `PROJ-` turns `1234` into `PROJ-1234`.                                        |
 | `opener`                  | table  | Optional configuration for opening the selected project in a browser using the `o` key.                                            |
 | `opener.url`              | string | URL template. `%s` is replaced with the selected issue/project name.                                                               |
-| `opener.desc`             | string | Description displayed for the opener.                                                                                              |
+| `opener.name`             | string | Name displayed for the opener.                                                                                              |
 
 #### Override config directory
 

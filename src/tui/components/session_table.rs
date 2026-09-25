@@ -512,7 +512,7 @@ impl<'a> SessionTable<'a> {
         if let Some(opener) = config.opener() {
             binds.push(Keybind::new(
                 "o".to_string(),
-                format!("Open in {}", opener.description()),
+                format!("Open in {}", opener.name()),
             ));
         }
 
