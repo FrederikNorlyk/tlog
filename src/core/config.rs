@@ -50,6 +50,16 @@ impl Config {
         Ok(())
     }
 
+    /// Sets the app's issue tracker.
+    ///
+    /// # Errors
+    /// Returns an error if reading or writing the configuration failed.
+    pub fn set_issue_tracker(issue_tracker: Option<IssueTracker>) -> Result<(), ConfigError> {
+        let mut config = Config::get()?;
+        config.issue_tracker = issue_tracker;
+        Self::write(&config)
+    }
+
     /// Returns the path to the app's configuration file.
     /// If the file doesn't exist, it attempts to create it.
     ///

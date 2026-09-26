@@ -179,3 +179,147 @@ fn corrupt_database_reports_initialization_path_and_cause() {
         "{error}"
     );
 }
+
+#[test]
+fn issue_tracker_configuration_can_be_queried_created_and_updated() {
+    let cli = CliTest::new();
+    let output = cli.run(&["config", "issue-tracker"]);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"No issue tracker has been configured\n");
+
+    assert!(
+        cli.run(&[
+            "config",
+            "opener",
+            "--url",
+            "https://example.com/%s",
+            "--name",
+            "Example"
+        ])
+        .status
+        .success()
+    );
+    assert!(
+        cli.run(&["config", "issue-tracker", "--type", "jira"])
+            .status
+            .success()
+    );
+    let output = cli.run(&["config", "issue-tracker"]);
+    assert_eq!(output.stdout, b"Issue tracker: jira\n");
+
+    assert!(
+        cli.run(&["config", "issue-tracker", "--id-prefix", "PROJ-"])
+            .status
+            .success()
+    );
+    assert!(
+        cli.run(&["config", "issue-tracker", "--type", "jira"])
+            .status
+            .success()
+    );
+    let path = cli.directory.path().join("config/tlog.toml");
+    let before = std::fs::read_to_string(&path).unwrap();
+    let output = cli.run(&["config", "issue-tracker"]);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"Issue tracker: jira\nID prefix: PROJ-\n");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    let config: toml::Value = toml::from_str(&before).unwrap();
+    assert_eq!(config["opener"]["name"].as_str(), Some("Example"));
+    assert_eq!(config["time_format"].as_str(), Some("HoursMinutesSeconds"));
+
+    assert!(
+        cli.run(&["config", "issue-tracker", "--id-prefix", ""])
+            .status
+            .success()
+    );
+    let output = cli.run(&["config", "issue-tracker"]);
+    assert_eq!(output.stdout, b"Issue tracker: jira\n");
+}
+
+#[test]
+fn issue_tracker_configuration_rejects_missing_or_unknown_type() {
+    let cli = CliTest::new();
+    cli.run(&["config", "issue-tracker"]);
+    let path = cli.directory.path().join("config/tlog.toml");
+    let before = std::fs::read_to_string(&path).unwrap();
+    for (args, code, message) in [
+        (
+            vec!["config", "issue-tracker", "--id-prefix", "PROJ-"],
+            1,
+            "type is required",
+        ),
+        (
+            vec!["config", "issue-tracker", "--type", "unknown"],
+            2,
+            "invalid value",
+        ),
+    ] {
+        let output = cli.run(&args);
+        assert_eq!(output.status.code(), Some(code));
+        assert!(String::from_utf8(output.stderr).unwrap().contains(message));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn unsetting_issue_tracker_preserves_other_settings_and_can_be_repeated() {
+    let cli = CliTest::new();
+    for args in [
+        vec![
+            "config",
+            "issue-tracker",
+            "--type",
+            "jira",
+            "--id-prefix",
+            "PROJ-",
+        ],
+        vec![
+            "config",
+            "opener",
+            "--url",
+            "https://example.com/%s",
+            "--name",
+            "Example",
+        ],
+        vec!["config", "time-format", "seconds"],
+    ] {
+        assert!(cli.run(&args).status.success());
+    }
+    let path = cli.directory.path().join("config/tlog.toml");
+    let mut expected: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    expected.as_table_mut().unwrap().remove("issue_tracker");
+
+    for _ in 0..2 {
+        let output = cli.run(&["config", "issue-tracker", "--unset"]);
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        let actual: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(actual, expected);
+        let output = cli.run(&["config", "issue-tracker"]);
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"No issue tracker has been configured\n");
+    }
+}
+
+#[test]
+fn unsetting_issue_tracker_rejects_configuration_options_without_modifying_config() {
+    let cli = CliTest::new();
+    assert!(
+        cli.run(&["config", "issue-tracker", "--type", "jira"])
+            .status
+            .success()
+    );
+    let path = cli.directory.path().join("config/tlog.toml");
+    let before = std::fs::read_to_string(&path).unwrap();
+    for option in [["--type", "jira"], ["--id-prefix", "PROJ-"]] {
+        let output = cli.run(&["config", "issue-tracker", "--unset", option[0], option[1]]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("cannot be used with")
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+}

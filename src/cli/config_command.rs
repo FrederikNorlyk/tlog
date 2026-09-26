@@ -1,9 +1,15 @@
 use crate::core::config::{Config, ConfigError, ConfigMetadata};
+use crate::core::issue_tracker::IssueTracker;
 use crate::core::time_format::TimeFormat;
 use crate::db::database::Database;
 use crate::model::opener::Opener;
 use anyhow::Context;
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum IssueTrackerType {
+    Jira,
+}
 
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
@@ -11,6 +17,17 @@ pub enum ConfigCommand {
     /// Set time format (`Seconds` | `HoursMinutes` | `HoursMinutesSeconds` | `DecimalHours`)
     TimeFormat {
         value: Option<TimeFormat>,
+    },
+    /// Show or configure the issue tracker
+    IssueTracker {
+        #[arg(long = "type", value_enum)]
+        tracker_type: Option<IssueTrackerType>,
+        /// Prefix added to issue IDs (use an empty string to clear)
+        #[arg(long)]
+        id_prefix: Option<String>,
+        /// Remove the issue tracker configuration
+        #[arg(long, conflicts_with_all = ["tracker_type", "id_prefix"])]
+        unset: bool,
     },
     Opener {
         #[arg(long)]
@@ -51,6 +68,48 @@ pub fn handle_config_command(
             } else {
                 println!("Time format: {:?}", config.time_format());
             }
+        }
+        ConfigCommand::IssueTracker {
+            tracker_type,
+            id_prefix,
+            unset,
+        } => {
+            if unset {
+                Config::set_issue_tracker(None).context("Could not unset issue tracker")?;
+                return Ok(());
+            }
+            if tracker_type.is_none() && id_prefix.is_none() {
+                match config.issue_tracker() {
+                    Some(IssueTracker::Jira { id_prefix }) => {
+                        println!("Issue tracker: jira");
+                        if let Some(prefix) = id_prefix {
+                            println!("ID prefix: {prefix}");
+                        }
+                    }
+                    None => println!("No issue tracker has been configured"),
+                }
+                return Ok(());
+            }
+
+            let existing = config.issue_tracker().as_ref();
+            let tracker_type = tracker_type
+                .or_else(|| {
+                    existing.map(|tracker| match tracker {
+                        IssueTracker::Jira { .. } => IssueTrackerType::Jira,
+                    })
+                })
+                .ok_or(ConfigError::RequiredFieldMissing("type"))
+                .context("Could not configure issue tracker")?;
+            let id_prefix = id_prefix
+                .or_else(|| match existing {
+                    Some(IssueTracker::Jira { id_prefix }) => id_prefix.clone(),
+                    None => None,
+                })
+                .filter(|prefix| !prefix.is_empty());
+            let tracker = match tracker_type {
+                IssueTrackerType::Jira => IssueTracker::Jira { id_prefix },
+            };
+            Config::set_issue_tracker(Some(tracker)).context("Could not save issue tracker")?;
         }
         ConfigCommand::Opener { url, name } => {
             if url.is_none() && name.is_none() {
