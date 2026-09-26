@@ -17,6 +17,7 @@ unsafe_code = "deny"
 unused = "deny"
 
 [dependencies]
+anyhow = "1.0.102"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 clap = { version = "4.6.1", features = ["derive"] }
 directories = "6.0.0"

@@ -16,8 +16,12 @@ impl Config {
     /// Returns an error if reading or writing to files failed.
     pub fn get() -> Result<ConfigMetadata, ConfigError> {
         let path = Config::get_or_create_file_path()?;
-        let contents = fs::read_to_string(path)?;
-        Ok(toml::from_str(&contents)?)
+        let contents = fs::read_to_string(&path).map_err(|source| ConfigError::Io {
+            operation: "read configuration",
+            path: path.clone(),
+            source,
+        })?;
+        toml::from_str(&contents).map_err(|source| ConfigError::TomlDeserialize { path, source })
     }
 
     /// Sets the app's time format
@@ -63,9 +67,17 @@ impl Config {
 
     fn write(config: &ConfigMetadata) -> Result<(), ConfigError> {
         let path = Self::file_path()?;
-        let toml_str = toml::to_string_pretty(config)?;
+        let toml_str =
+            toml::to_string_pretty(config).map_err(|source| ConfigError::TomlSerialize {
+                path: path.clone(),
+                source,
+            })?;
 
-        fs::write(&path, toml_str)?;
+        fs::write(&path, toml_str).map_err(|source| ConfigError::Io {
+            operation: "write configuration",
+            path,
+            source,
+        })?;
 
         Ok(())
     }
@@ -75,7 +87,11 @@ impl Config {
         let path = config_dir.join("tlog.toml");
 
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(|source| ConfigError::Io {
+                operation: "create configuration directory",
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
 
         Ok(path)
@@ -122,12 +138,25 @@ pub enum ConfigError {
     MissingConfigDirectory,
     #[error("Could not determine application data directory")]
     MissingDataDirectory,
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Toml deserialization error: {0}")]
-    TomlDeserialize(#[from] toml::de::Error),
-    #[error("Toml serialization error: {0}")]
-    TomlSerialize(#[from] toml::ser::Error),
+    #[error("Could not {operation} at {}", path.display())]
+    Io {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Could not parse configuration {}", path.display())]
+    TomlDeserialize {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+    #[error("Could not serialize configuration {}", path.display())]
+    TomlSerialize {
+        path: PathBuf,
+        #[source]
+        source: toml::ser::Error,
+    },
     #[error("{0} is required")]
     RequiredFieldMissing(&'static str),
 }

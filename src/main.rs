@@ -1,11 +1,13 @@
+use anyhow::Context;
 use clap::Parser;
+use std::process::ExitCode;
 use time::OffsetDateTime;
 use tlog::cli::commands::{Cli, Command};
 use tlog::cli::config_command::handle_config_command;
 use tlog::cli::project_command::handle_project_command;
-use tlog::core::app_error::AppError;
 use tlog::core::clipboard::system_clipboard::SystemClipboard;
 use tlog::core::config::Config;
+use tlog::core::diagnostic;
 use tlog::core::time_format::TimeFormat;
 use tlog::core::tracking::Tracking;
 use tlog::db::database::Database;
@@ -13,17 +15,33 @@ use tlog::db::project_repository::ProjectRepository;
 use tlog::model::session::Session;
 use tlog::tui::terminal_user_interface::TerminalUserInterface;
 
-fn main() -> Result<(), AppError> {
-    let database = Database::new()?;
-    database.init()?;
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {}", diagnostic::report(&error));
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    let config = Config::get()?;
+fn run() -> anyhow::Result<()> {
+    let database = Database::new().context("Could not open application database")?;
+    database.init().with_context(|| {
+        format!(
+            "Could not initialize database {}",
+            database.connection().path().unwrap_or("<memory>")
+        )
+    })?;
+
+    let config = Config::get().context("Could not load configuration")?;
 
     let cli = Cli::parse();
 
     let Some(command) = cli.command else {
-        let clipboard = Box::new(SystemClipboard::new()?);
-        let mut tui = TerminalUserInterface::new(database.connection(), clipboard)?;
+        let clipboard = Box::new(SystemClipboard::new().context("Could not initialize clipboard")?);
+        let mut tui = TerminalUserInterface::new(database.connection(), clipboard)
+            .context("Could not initialize terminal interface")?;
 
         ratatui::run(|terminal| tui.run(terminal))?;
 
@@ -35,15 +53,19 @@ fn main() -> Result<(), AppError> {
             let mut stdout = std::io::stdout();
             let project_repository = ProjectRepository::new(database.connection());
             handle_project_command(command, &project_repository, &mut stdout)
-                .map_err(|e| AppError::General(format!("{e}")))?;
+                .context("Could not execute project command")?;
         }
         Command::Start { project_id } => {
             let tracking = Tracking::new(database.connection());
-            tracking.start(project_id)?;
+            tracking
+                .start(project_id)
+                .with_context(|| format!("Could not start tracking project {project_id}"))?;
         }
         Command::Stop { project_id } => {
             let tracking = Tracking::new(database.connection());
-            tracking.stop(project_id)?;
+            tracking
+                .stop(project_id)
+                .with_context(|| format!("Could not stop tracking project {project_id}"))?;
         }
         Command::Set {
             project_id,
@@ -53,11 +75,17 @@ fn main() -> Result<(), AppError> {
             let tracking = Tracking::new(database.connection());
             let query_date = date.unwrap_or_else(|| OffsetDateTime::now_utc().date());
 
-            tracking.set(project_id, query_date, total_seconds)?;
+            tracking
+                .set(project_id, query_date, total_seconds)
+                .with_context(|| {
+                    format!("Could not set time for project {project_id} on {query_date}")
+                })?;
         }
         Command::Reset { project_id, date } => {
             let tracking = Tracking::new(database.connection());
-            tracking.reset(project_id, date)?;
+            tracking
+                .reset(project_id, date)
+                .with_context(|| format!("Could not reset project {project_id} on {date}"))?;
         }
         Command::List { date } => {
             const BOLD: &str = "\x1b[1m";
@@ -69,7 +97,8 @@ fn main() -> Result<(), AppError> {
             let time_format = config.time_format();
 
             tracking
-                .list_all_sessions(query_date, None)?
+                .list_all_sessions(query_date, None)
+                .with_context(|| format!("Could not list sessions on {query_date}"))?
                 .iter()
                 .for_each(|session| {
                     total += session.total_seconds;

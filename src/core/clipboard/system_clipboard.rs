@@ -1,4 +1,3 @@
-use crate::core::app_error::AppError;
 use crate::core::clipboard::clipboard_backend::ClipboardBackend;
 use arboard::Clipboard;
 
@@ -12,7 +11,7 @@ impl SystemClipboard {
     /// # Errors
     /// On some platforms or desktop environments, an error can be returned if clipboards are not supported.
     /// This may be retried.
-    pub fn new() -> Result<Self, AppError> {
+    pub fn new() -> Result<Self, arboard::Error> {
         Ok(Self {
             inner: Clipboard::new()?,
         })
@@ -20,12 +19,12 @@ impl SystemClipboard {
 }
 
 impl ClipboardBackend for SystemClipboard {
-    fn set_text(&mut self, text: String) -> Result<(), AppError> {
+    fn set_text(&mut self, text: String) -> Result<(), arboard::Error> {
         self.inner.set_text(text)?;
         Ok(())
     }
 
-    fn get_text(&mut self) -> Result<String, AppError> {
-        Ok(self.inner.get_text()?)
+    fn get_text(&mut self) -> Result<String, arboard::Error> {
+        self.inner.get_text()
     }
 }

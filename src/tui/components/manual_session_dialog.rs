@@ -1,4 +1,4 @@
-use crate::core::time_format::TimeFormat;
+use crate::core::time_format::{TimeFormat, TimeParseError};
 use crate::tui::components::dialog::Dialog;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
@@ -52,7 +52,7 @@ impl<'a> ManualSessionDialog<'a> {
                     };
                 }
                 Err(error) => {
-                    self.mark_form_invalid(error);
+                    self.mark_form_invalid(error.to_string());
                 }
             },
             _ => {
@@ -71,7 +71,7 @@ impl<'a> ManualSessionDialog<'a> {
         self.text_area.set_block(new_block);
     }
 
-    fn get_value(&self) -> Result<i64, String> {
+    fn get_value(&self) -> Result<i64, TimeParseError> {
         let text = self
             .text_area
             .lines()
@@ -145,6 +145,24 @@ mod tests {
         }
 
         #[test]
+        fn invalid_duration_can_be_corrected_and_saved() {
+            let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
+            dialog.handle_key_event(key(KeyCode::Char('x')));
+            assert!(matches!(
+                dialog.handle_key_event(key(KeyCode::Enter)),
+                ManualSessionEvent::Consumed
+            ));
+            dialog.handle_key_event(key(KeyCode::Backspace));
+            for c in "120".chars() {
+                dialog.handle_key_event(key(KeyCode::Char(c)));
+            }
+            assert!(matches!(
+                dialog.handle_key_event(key(KeyCode::Enter)),
+                ManualSessionEvent::Save { total_seconds: 120 }
+            ));
+        }
+
+        #[test]
         fn char_input_consumed() {
             let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
 
@@ -163,7 +181,7 @@ mod tests {
 
         let error = dialog.get_value().unwrap_err();
 
-        assert_eq!(error, "Expected whole seconds (e.g. 120)");
+        assert!(matches!(error, TimeParseError::Seconds { .. }));
 
         let mut dialog = ManualSessionDialog::new(TimeFormat::Seconds);
 

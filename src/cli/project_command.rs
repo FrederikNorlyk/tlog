@@ -1,5 +1,5 @@
-use crate::core::app_error::AppError;
 use crate::db::project_repository::ProjectRepository;
+use anyhow::Context;
 use clap::Subcommand;
 use std::io::Write;
 use thiserror::Error;
@@ -73,10 +73,12 @@ pub fn handle_project_command<W: Write>(
     command: ProjectCommand,
     project_repository: &ProjectRepository,
     output: &mut W,
-) -> Result<(), ProjectCommandError> {
+) -> anyhow::Result<()> {
     match command {
         ProjectCommand::Add { name, description } => {
-            let id = project_repository.insert(&name, description.as_deref())?;
+            let id = project_repository
+                .insert(&name, description.as_deref())
+                .with_context(|| format!("Could not create project {name}"))?;
             println!("Project #{id} created");
         }
         ProjectCommand::Update {
@@ -85,8 +87,12 @@ pub fn handle_project_command<W: Write>(
             description,
             clear_description,
         } => {
-            let Some(mut project) = project_repository.get(id)? else {
-                return Err(ProjectCommandError::ProjectNotFound { project_id: id });
+            let Some(mut project) = project_repository
+                .get(id)
+                .with_context(|| format!("Could not read project {id}"))?
+            else {
+                return Err(ProjectCommandError::ProjectNotFound { project_id: id })
+                    .with_context(|| format!("Could not update project {id}"));
             };
 
             if let Some(name) = name {
@@ -99,22 +105,30 @@ pub fn handle_project_command<W: Write>(
                 project.description = Some(description);
             }
 
-            project_repository.update(&project)?;
+            project_repository
+                .update(&project)
+                .with_context(|| format!("Could not update project {id}"))?;
         }
         ProjectCommand::Delete { id } => {
-            if !project_repository.delete(id)? {
-                return Err(ProjectCommandError::ProjectNotFound { project_id: id });
+            if !project_repository
+                .delete(id)
+                .with_context(|| format!("Could not delete project {id}"))?
+            {
+                return Err(ProjectCommandError::ProjectNotFound { project_id: id })
+                    .with_context(|| format!("Could not delete project {id}"));
             }
         }
         ProjectCommand::List { debug } => {
-            project_repository.for_each(|project| {
+            for project in project_repository
+                .list()
+                .context("Could not list projects")?
+            {
                 if debug {
-                    writeln!(output, "{project:?}")?;
+                    writeln!(output, "{project:?}").context("Could not write project to stdout")?;
                 } else {
-                    writeln!(output, "{project}")?;
+                    writeln!(output, "{project}").context("Could not write project to stdout")?;
                 }
-                Ok(())
-            })?;
+            }
         }
     }
 
@@ -123,10 +137,6 @@ pub fn handle_project_command<W: Write>(
 
 #[derive(Debug, Error)]
 pub enum ProjectCommandError {
-    #[error("SQLITE error: {0}")]
-    SQLite(#[from] rusqlite::Error),
-    #[error("Application error: {0}")]
-    AppError(#[from] AppError),
     #[error("Project with id {project_id} was not found")]
     ProjectNotFound { project_id: i32 },
 }
@@ -409,8 +419,8 @@ mod tests {
                 );
 
                 assert!(matches!(
-                    result,
-                    Err(ProjectCommandError::ProjectNotFound { project_id: 999 })
+                    result.unwrap_err().downcast_ref::<ProjectCommandError>(),
+                    Some(ProjectCommandError::ProjectNotFound { project_id: 999 })
                 ));
 
                 Ok(())
@@ -446,8 +456,8 @@ mod tests {
                 );
 
                 assert!(matches!(
-                    result,
-                    Err(ProjectCommandError::ProjectNotFound { project_id: 999 })
+                    result.unwrap_err().downcast_ref::<ProjectCommandError>(),
+                    Some(ProjectCommandError::ProjectNotFound { project_id: 999 })
                 ));
 
                 Ok(())

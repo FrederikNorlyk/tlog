@@ -1,5 +1,6 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 #[derive(Serialize, Deserialize, Copy, Clone, ValueEnum, Debug, Eq, PartialEq)]
 pub enum TimeFormat {
@@ -81,19 +82,19 @@ impl TimeFormat {
     ///
     /// # Errors
     /// Returns an error if the supplied input is invalid
-    pub fn parse(self, text: &str) -> Result<i64, String> {
+    pub fn parse(self, text: &str) -> Result<i64, TimeParseError> {
         if text.is_empty() {
-            return Err("Value cannot be empty".to_string());
+            return Err(TimeParseError::Empty);
         }
 
         match self {
             TimeFormat::Seconds => {
                 let seconds: i64 = text
                     .parse()
-                    .map_err(|_| "Expected whole seconds (e.g. 120)".to_string())?;
+                    .map_err(|source| TimeParseError::Seconds { source })?;
 
                 if seconds < 0 {
-                    return Err("Seconds must be >= 0".to_string());
+                    return Err(TimeParseError::NegativeSeconds);
                 }
 
                 Ok(seconds)
@@ -103,15 +104,13 @@ impl TimeFormat {
                 let parts: Vec<&str> = text.split(':').collect();
 
                 if parts.len() > 3 {
-                    return Err(
-                        "Expected format HH[:MM[:SS]] (e.g. 1, 01:30, 01:30:15)".to_string()
-                    );
+                    return Err(TimeParseError::ExpectedHms);
                 }
 
                 let (h, m, s) = helpers::parse_hms(&parts)?;
 
                 if m >= 60 || s >= 60 {
-                    return Err("Minutes and seconds must be < 60".to_string());
+                    return Err(TimeParseError::MinutesSecondsRange);
                 }
 
                 Ok(h * 3600 + m * 60 + s)
@@ -121,13 +120,13 @@ impl TimeFormat {
                 let parts: Vec<&str> = text.split(':').collect();
 
                 if parts.len() > 2 {
-                    return Err("Expected format HH[:MM] (e.g. 1, 01:30)".to_string());
+                    return Err(TimeParseError::ExpectedHm);
                 }
 
                 let (h, m, _) = helpers::parse_hms(&parts)?;
 
                 if m >= 60 {
-                    return Err("Minutes must be < 60".to_string());
+                    return Err(TimeParseError::MinutesRange);
                 }
 
                 Ok(h * 3600 + m * 60)
@@ -138,7 +137,7 @@ impl TimeFormat {
                     let parts: Vec<&str> = text.split(':').collect();
 
                     if parts.len() > 2 {
-                        return Err("Expected format HH[:MM] (e.g. 1, 1.5, 01:30)".to_string());
+                        return Err(TimeParseError::ExpectedDecimalHm);
                     }
 
                     let (h, m, _) = helpers::parse_hms(&parts)?;
@@ -147,7 +146,7 @@ impl TimeFormat {
                     let m = m as f64;
 
                     if m >= 60.0 {
-                        return Err("Minutes must be < 60".to_string());
+                        return Err(TimeParseError::MinutesRange);
                     }
 
                     #[allow(clippy::cast_precision_loss)]
@@ -156,11 +155,11 @@ impl TimeFormat {
                     seconds
                 } else {
                     text.parse::<f64>()
-                        .map_err(|_| "Expected decimal hours (e.g. 1.5) or HH:MM".to_string())?
+                        .map_err(|source| TimeParseError::Decimal { source })?
                 };
 
                 if value < 0.0 {
-                    return Err("Value must be >= 0".to_string());
+                    return Err(TimeParseError::NegativeValue);
                 }
 
                 #[allow(clippy::cast_possible_truncation)]
@@ -172,7 +171,44 @@ impl TimeFormat {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum TimeParseError {
+    #[error("Value cannot be empty")]
+    Empty,
+    #[error("Expected whole seconds (e.g. 120)")]
+    Seconds {
+        #[source]
+        source: std::num::ParseIntError,
+    },
+    #[error("Seconds must be >= 0")]
+    NegativeSeconds,
+    #[error("Expected format HH[:MM[:SS]] (e.g. 1, 01:30, 01:30:15)")]
+    ExpectedHms,
+    #[error("Expected format HH[:MM] (e.g. 1, 01:30)")]
+    ExpectedHm,
+    #[error("Expected format HH[:MM] (e.g. 1, 1.5, 01:30)")]
+    ExpectedDecimalHm,
+    #[error("Minutes and seconds must be < 60")]
+    MinutesSecondsRange,
+    #[error("Minutes must be < 60")]
+    MinutesRange,
+    #[error("Expected decimal hours (e.g. 1.5) or HH:MM")]
+    Decimal {
+        #[source]
+        source: std::num::ParseFloatError,
+    },
+    #[error("Value must be >= 0")]
+    NegativeValue,
+    #[error("Invalid {component}")]
+    Component {
+        component: &'static str,
+        #[source]
+        source: std::num::ParseIntError,
+    },
+}
+
 mod helpers {
+    use super::TimeParseError;
     #[must_use]
     pub(super) fn seconds_to_hms(seconds: i64) -> (i64, i64, i64) {
         let hours = seconds / 3600;
@@ -182,24 +218,36 @@ mod helpers {
         (hours, minutes, seconds)
     }
 
-    pub(super) fn parse_hms(parts: &[&str]) -> Result<(i64, i64, i64), String> {
-        let h: i64 = parts
-            .first()
-            .unwrap_or(&"0")
-            .parse()
-            .map_err(|_| "Invalid hours".to_string())?;
+    pub(super) fn parse_hms(parts: &[&str]) -> Result<(i64, i64, i64), super::TimeParseError> {
+        let h: i64 =
+            parts
+                .first()
+                .unwrap_or(&"0")
+                .parse()
+                .map_err(|source| TimeParseError::Component {
+                    component: "hours",
+                    source,
+                })?;
 
-        let m: i64 = parts
-            .get(1)
-            .unwrap_or(&"0")
-            .parse()
-            .map_err(|_| "Invalid minutes".to_string())?;
+        let m: i64 =
+            parts
+                .get(1)
+                .unwrap_or(&"0")
+                .parse()
+                .map_err(|source| TimeParseError::Component {
+                    component: "minutes",
+                    source,
+                })?;
 
-        let s: i64 = parts
-            .get(2)
-            .unwrap_or(&"0")
-            .parse()
-            .map_err(|_| "Invalid seconds".to_string())?;
+        let s: i64 =
+            parts
+                .get(2)
+                .unwrap_or(&"0")
+                .parse()
+                .map_err(|source| TimeParseError::Component {
+                    component: "seconds",
+                    source,
+                })?;
 
         Ok((h, m, s))
     }
@@ -330,12 +378,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn invalid_seconds_retains_the_numeric_parse_cause() {
+        use std::error::Error;
+        let error = TimeFormat::Seconds.parse("abc").unwrap_err();
+        assert!(matches!(error, TimeParseError::Seconds { .. }));
+        assert!(error.source().unwrap().is::<std::num::ParseIntError>());
+    }
+
     mod string_to_seconds {
         use super::*;
 
         fn assert_invalid_input(text: &str, expected_error: &str, time_format: TimeFormat) {
             let error = time_format.parse(text).unwrap_err();
-            assert_eq!(expected_error, error);
+            assert_eq!(expected_error, error.to_string());
         }
 
         fn assert_valid_input(text: &str, time_format: TimeFormat) {

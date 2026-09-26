@@ -1,6 +1,6 @@
-use crate::core::app_error::AppError;
 use crate::core::issue_tracker::issue::Issue;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
+use thiserror::Error;
 
 #[derive(Debug)]
 pub struct JiraCLI;
@@ -10,7 +10,7 @@ impl JiraCLI {
     ///
     /// # Errors
     /// Returns an error if running the command fails.
-    pub fn fetch_issue(query: &str, id_prefix: Option<&str>) -> Result<Option<Issue>, AppError> {
+    pub fn fetch_issue(query: &str, id_prefix: Option<&str>) -> Result<Option<Issue>, JiraError> {
         let query = if let Some(prefix) = id_prefix {
             if query.starts_with(prefix) {
                 query.to_owned()
@@ -24,12 +24,17 @@ impl JiraCLI {
         let output = Command::new("acli")
             .args(["jira", "workitem", "view", query.as_str(), "-f", "summary"])
             .output()
-            .map_err(|e| AppError::Command(e.to_string()))?;
+            .map_err(|source| JiraError::Launch {
+                query: query.clone(),
+                source,
+            })?;
 
         if !output.status.success() {
-            return Err(AppError::Command(
-                String::from_utf8_lossy(&output.stderr).to_string(),
-            ));
+            return Err(JiraError::Failed {
+                query,
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -50,6 +55,22 @@ impl JiraCLI {
 
         Ok(Some(Issue { id, description }))
     }
+}
+
+#[derive(Debug, Error)]
+pub enum JiraError {
+    #[error("Could not launch acli for Jira issue {query}")]
+    Launch {
+        query: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("acli failed for Jira issue {query} ({status})\n{stderr}")]
+    Failed {
+        query: String,
+        status: ExitStatus,
+        stderr: String,
+    },
 }
 
 #[cfg(all(test, unix))]
@@ -260,7 +281,13 @@ mod tests {
 
                 let result = JiraCLI::fetch_issue("PROJ-42", None);
 
-                assert!(matches!(result, Err(AppError::Command(message)) if !message.is_empty()));
+                let error = result.unwrap_err();
+                let source = std::error::Error::source(&error)
+                    .expect("launch error must preserve its source");
+                assert_eq!(
+                    source.downcast_ref::<std::io::Error>().unwrap().kind(),
+                    std::io::ErrorKind::NotFound
+                );
             }
 
             #[test]
@@ -276,8 +303,45 @@ mod tests {
                 let result = JiraCLI::fetch_issue("PROJ-42", None);
 
                 assert!(matches!(result,
-                    Err(AppError::Command(message)) if message == "Not authenticated\n"
+                    Err(JiraError::Failed { status, stderr, .. }) if status.code() == Some(1) && stderr == "Not authenticated\n"
                 ));
+            }
+
+            #[test]
+            #[serial]
+            fn permission_denied_preserves_os_error() {
+                let context = TestContext::new();
+                context.install_acli(b"", b"", 0);
+                fs::set_permissions(
+                    context.directory.path().join("acli"),
+                    fs::Permissions::from_mode(0o644),
+                )
+                .unwrap();
+                let error = JiraCLI::fetch_issue("PROJ-42", None).unwrap_err();
+                assert!(
+                    matches!(error, JiraError::Launch { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied)
+                );
+            }
+
+            #[test]
+            #[serial]
+            fn signal_termination_keeps_status_and_stderr() {
+                use std::os::unix::process::ExitStatusExt;
+                let context = TestContext::new();
+                context.install_acli(b"", b"", 0);
+                fs::write(
+                    context.directory.path().join("acli"),
+                    "#!/bin/sh\nprintf 'interrupted request' >&2\nkill -TERM $$\n",
+                )
+                .unwrap();
+                let error = JiraCLI::fetch_issue("PROJ-42", None).unwrap_err();
+                assert!(
+                    matches!(&error, JiraError::Failed { status, stderr, .. } if status.code().is_none() && status.signal() == Some(15) && stderr == "interrupted request")
+                );
+                let report = crate::core::diagnostic::report(&error.into());
+                assert!(report.contains("signal"), "{report}");
+                assert!(report.contains("PROJ-42"), "{report}");
+                assert_eq!(report.matches("interrupted request").count(), 1);
             }
 
             #[test]
@@ -289,7 +353,7 @@ mod tests {
                 let result = JiraCLI::fetch_issue("PROJ-42", None);
 
                 assert!(matches!(result,
-                    Err(AppError::Command(message)) if message == "Error: \u{fffd}"
+                    Err(JiraError::Failed { status, stderr, .. }) if status.code() == Some(1) && stderr == "Error: \u{fffd}"
                 ));
             }
         }

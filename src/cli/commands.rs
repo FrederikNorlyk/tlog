@@ -1,6 +1,7 @@
 use crate::cli::config_command::ConfigCommand;
 use crate::cli::project_command::ProjectCommand;
 use clap::{Parser, Subcommand};
+use thiserror::Error;
 use time::Date;
 use time::error::Parse;
 use time::format_description::well_known::Iso8601;
@@ -79,15 +80,27 @@ fn parse_date(s: &str) -> Result<Date, Parse> {
     Date::parse(s, &Iso8601::DATE)
 }
 
-fn parse_duration(s: &str) -> Result<i64, String> {
-    let (h, m) = s.split_once(':').ok_or("expected hh:mm format")?;
+fn parse_duration(s: &str) -> Result<i64, DurationParseError> {
+    let (h, m) = s.split_once(':').ok_or(DurationParseError::Format)?;
 
-    let hours: i64 = h.parse().map_err(|_| "invalid hours")?;
-    let minutes: i64 = m.parse().map_err(|_| "invalid minutes")?;
+    let hours: i64 = h.parse().map_err(DurationParseError::Hours)?;
+    let minutes: i64 = m.parse().map_err(DurationParseError::Minutes)?;
 
     if minutes >= 60 {
-        return Err("minutes must be < 60".into());
+        return Err(DurationParseError::MinutesRange);
     }
 
     Ok(hours * 3600 + minutes * 60)
+}
+
+#[derive(Debug, Error)]
+enum DurationParseError {
+    #[error("expected hh:mm format")]
+    Format,
+    #[error("invalid hours")]
+    Hours(#[source] std::num::ParseIntError),
+    #[error("invalid minutes")]
+    Minutes(#[source] std::num::ParseIntError),
+    #[error("minutes must be < 60")]
+    MinutesRange,
 }

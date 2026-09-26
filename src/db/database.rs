@@ -21,16 +21,22 @@ impl Database {
     ///
     /// Returns [`DatabaseError::Io`] if the database parent directory cannot be created.
     ///
-    /// Returns [`DatabaseError::Sqlite`] if opening the `SQLite` database fails.
+    /// Returns [`DatabaseError::Open`] if opening the `SQLite` database fails.
     pub fn new() -> Result<Self, DatabaseError> {
         let db_path = Self::database_path()?;
 
         if let Some(parent) = db_path.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(|source| DatabaseError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
 
         Ok(Self {
-            connection: Connection::open(db_path)?,
+            connection: Connection::open(&db_path).map_err(|source| DatabaseError::Open {
+                path: db_path,
+                source,
+            })?,
         })
     }
 
@@ -84,8 +90,18 @@ pub trait Repository<'a> {
 pub enum DatabaseError {
     #[error("Could not determine application data directory")]
     MissingDataDirectory,
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("SQLite error: {0}")]
+    #[error("Could not create database directory {}", path.display())]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Could not open database {}", path.display())]
+    Open {
+        path: PathBuf,
+        #[source]
+        source: rusqlite::Error,
+    },
+    #[error("Could not initialize database schema")]
     Sqlite(#[from] rusqlite::Error),
 }

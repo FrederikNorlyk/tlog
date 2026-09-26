@@ -1,4 +1,3 @@
-use crate::core::app_error::AppError;
 use crate::db::database::Repository;
 use crate::model::project::Project;
 use rusqlite::{Connection, OptionalExtension, Row, named_params, params_from_iter};
@@ -155,27 +154,15 @@ impl<'a> ProjectRepository<'a> {
         rows.collect()
     }
 
-    /// Calls the provided function once for each project in the database.
+    /// Returns projects in name and description order.
     ///
     /// # Errors
-    ///
-    /// Returns an error if preparing or executing the query fails, or if a row
-    /// cannot be converted into a [`Project`].
-    pub fn for_each<F>(&self, mut f: F) -> Result<(), AppError>
-    where
-        F: FnMut(Project) -> Result<(), AppError>,
-    {
-        let mut stmt = self
+    /// Returns database errors from query execution or row mapping.
+    pub fn list(&self) -> rusqlite::Result<Vec<Project>> {
+        let mut statement = self
             .connection
             .prepare("SELECT * FROM project ORDER BY name, description")?;
-
-        let rows = stmt.query_map([], Self::project_from_row)?;
-
-        for project in rows {
-            f(project?)?;
-        }
-
-        Ok(())
+        statement.query_map([], Self::project_from_row)?.collect()
     }
 
     fn project_from_row(row: &Row<'_>) -> rusqlite::Result<Project> {
@@ -338,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn test_for_each() -> Result<(), AppError> {
+    fn test_list() -> rusqlite::Result<()> {
         let context = DBTestContext::new()?;
         let project_repository = ProjectRepository::new(context.connection());
 
@@ -346,12 +333,7 @@ mod tests {
         project_repository.insert("Project B", Some("Desc"))?;
         project_repository.insert("Project C", None)?;
 
-        let mut projects = Vec::new();
-
-        project_repository.for_each(|project| {
-            projects.push(project);
-            Ok(())
-        })?;
+        let projects = project_repository.list()?;
 
         assert_eq!(projects.len(), 3);
 
