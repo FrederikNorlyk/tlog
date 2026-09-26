@@ -1,7 +1,7 @@
-pub mod app_error;
 pub mod clipboard;
 pub mod config;
 pub mod constants;
+pub mod diagnostic;
 pub mod issue_tracker;
 pub mod paths;
 pub mod time_format;

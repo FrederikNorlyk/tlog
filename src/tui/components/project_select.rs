@@ -1,7 +1,7 @@
-use crate::core::app_error::AppError;
 use crate::db::project_repository::ProjectRepository;
 use crate::model::project::Project;
 use crate::tui::components::dialog::Dialog;
+use anyhow::Context;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -25,7 +25,7 @@ impl<'a> ProjectSelect<'a> {
     ///
     /// # Errors
     /// Returns and error if querying projects fails.
-    pub fn new(connection: &'a Connection, date: Date) -> rusqlite::Result<Self> {
+    pub fn new(connection: &'a Connection, date: Date) -> anyhow::Result<Self> {
         let project_repository = ProjectRepository::new(connection);
 
         let mut state = ListState::default();
@@ -34,7 +34,9 @@ impl<'a> ProjectSelect<'a> {
         Ok(Self {
             connection,
             state,
-            projects: project_repository.search_by_name("", date)?,
+            projects: project_repository
+                .search_by_name("", date)
+                .with_context(|| format!("Could not load available projects on {date}"))?,
             text_area: TextArea::new(vec![String::new()]),
             date,
         })
@@ -45,10 +47,7 @@ impl<'a> ProjectSelect<'a> {
     /// # Errors
     ///
     /// Returns an error if executing user commands fails.
-    pub fn handle_key_event(
-        &mut self,
-        key_event: KeyEvent,
-    ) -> Result<ProjectSelectEvent, AppError> {
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> anyhow::Result<ProjectSelectEvent> {
         let ctrl_key_is_held = key_event.modifiers.contains(KeyModifiers::CONTROL);
 
         match key_event.code {
@@ -129,9 +128,11 @@ impl<'a> ProjectSelect<'a> {
         self.text_area.render(chunks[1], buf);
     }
 
-    fn search_projects(&mut self, query: &str) -> rusqlite::Result<()> {
+    fn search_projects(&mut self, query: &str) -> anyhow::Result<()> {
         let project_repository = ProjectRepository::new(self.connection);
-        self.projects = project_repository.search_by_name(query, self.date)?;
+        self.projects = project_repository
+            .search_by_name(query, self.date)
+            .with_context(|| format!("Could not search projects for {query:?} on {}", self.date))?;
 
         Ok(())
     }

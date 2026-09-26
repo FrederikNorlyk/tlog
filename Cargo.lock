@@ -2081,6 +2081,7 @@ dependencies = [
 name = "tlog"
 version = "1.2.0"
 dependencies = [
+ "anyhow",
  "arboard",
  "clap",
  "crossterm",

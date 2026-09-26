@@ -2,7 +2,6 @@ pub mod issue;
 pub mod issue_provider;
 pub mod jira_cli;
 
-use crate::core::app_error::AppError;
 use crate::core::issue_tracker::issue::Issue;
 use crate::core::issue_tracker::issue_provider::IssueProvider;
 use crate::core::issue_tracker::jira_cli::JiraCLI;
@@ -15,9 +14,9 @@ pub enum IssueTracker {
 }
 
 impl IssueProvider for IssueTracker {
-    fn fetch_issue(&self, id: &str) -> Result<Option<Issue>, AppError> {
+    fn fetch_issue(&self, id: &str) -> anyhow::Result<Option<Issue>> {
         match self {
-            Self::Jira { id_prefix } => JiraCLI::fetch_issue(id, id_prefix.as_deref()),
+            Self::Jira { id_prefix } => Ok(JiraCLI::fetch_issue(id, id_prefix.as_deref())?),
         }
     }
 }

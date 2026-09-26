@@ -1,8 +1,8 @@
-use crate::core::app_error::AppError;
 use crate::core::config::{Config, ConfigError, ConfigMetadata};
 use crate::core::time_format::TimeFormat;
 use crate::db::database::Database;
 use crate::model::opener::Opener;
+use anyhow::Context;
 use clap::Subcommand;
 
 #[derive(Debug, Subcommand)]
@@ -32,7 +32,7 @@ pub fn handle_config_command(
     command: ConfigCommand,
     database: &Database,
     config: &ConfigMetadata,
-) -> Result<(), AppError> {
+) -> anyhow::Result<()> {
     match command {
         ConfigCommand::Where => {
             let database_path = database
@@ -47,7 +47,7 @@ pub fn handle_config_command(
         }
         ConfigCommand::TimeFormat { value } => {
             if let Some(time_format) = value {
-                Config::set_time_format(time_format)?;
+                Config::set_time_format(time_format).context("Could not change time format")?;
             } else {
                 println!("Time format: {:?}", config.time_format());
             }
@@ -62,12 +62,14 @@ pub fn handle_config_command(
                 return Ok(());
             }
 
-            let url = unwrap_or_get_existing_url(url, config.opener().as_ref())?;
+            let url = unwrap_or_get_existing_url(url, config.opener().as_ref())
+                .context("Could not configure opener")?;
 
-            let name = unwrap_or_get_existing_name(name, config.opener().as_ref())?;
+            let name = unwrap_or_get_existing_name(name, config.opener().as_ref())
+                .context("Could not configure opener")?;
 
             let new_opener = Opener::new(url, name);
-            Config::set_opener(Some(new_opener))?;
+            Config::set_opener(Some(new_opener)).context("Could not save opener")?;
         }
     }
 
@@ -233,7 +235,7 @@ mod tests {
                 }
             }
 
-            fn run(&self, command: ConfigCommand) -> Result<(), AppError> {
+            fn run(&self, command: ConfigCommand) -> anyhow::Result<()> {
                 handle_config_command(command, &self.database, &Config::get()?)
             }
 
@@ -331,8 +333,8 @@ mod tests {
                 );
 
                 assert!(matches!(
-                    result,
-                    Err(AppError::Config(ConfigError::TomlDeserialize(_)))
+                    result.unwrap_err().downcast_ref::<ConfigError>(),
+                    Some(ConfigError::TomlDeserialize { .. })
                 ));
             }
         }
@@ -411,8 +413,8 @@ mod tests {
                         name: name.map(str::to_owned),
                     });
 
-                    assert!(matches!(result,
-                        Err(AppError::Config(ConfigError::RequiredFieldMissing(field))) if field == missing_field
+                    assert!(matches!(result.unwrap_err().downcast_ref::<ConfigError>(),
+                        Some(ConfigError::RequiredFieldMissing(field)) if *field == missing_field
                     ));
                     assert_eq!(context.contents(), before);
                 }

@@ -1,4 +1,3 @@
-use crate::core::app_error::AppError;
 use crate::core::clipboard::clipboard_backend::ClipboardBackend;
 use crate::core::config::Config;
 use crate::core::time_format::TimeFormat;
@@ -9,6 +8,7 @@ use crate::tui::components::keybinds_dialog::Keybind;
 use crate::tui::components::manual_session_dialog::{ManualSessionDialog, ManualSessionEvent};
 use crate::tui::components::project_select::{ProjectSelect, ProjectSelectEvent};
 use crate::tui::terminal_user_interface::{KeyEventResult, KeybindOverlay};
+use anyhow::Context;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint};
 use ratatui::style::{Color, Style};
@@ -50,10 +50,12 @@ impl<'a> SessionTable<'a> {
         date: Date,
         is_showing_copy_keybinds: bool,
         clipboard: Box<dyn ClipboardBackend>,
-    ) -> Result<Self, AppError> {
+    ) -> anyhow::Result<Self> {
         let mut table_state = TableState::default();
         let tracking = Tracking::new(connection);
-        let sessions = tracking.list_all_sessions(date, None)?;
+        let sessions = tracking
+            .list_all_sessions(date, None)
+            .with_context(|| format!("Could not load sessions on {date}"))?;
 
         if !sessions.is_empty() {
             table_state.select_next();
@@ -173,7 +175,7 @@ impl<'a> SessionTable<'a> {
     /// # Errors
     ///
     /// Returns an error if executing user commands fails.
-    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, AppError> {
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> anyhow::Result<KeyEventResult> {
         if self.project_select.is_some() {
             return self.handle_project_select_key_event(key_event);
         } else if self.manual_session_dialog.is_some() {
@@ -218,7 +220,10 @@ impl<'a> SessionTable<'a> {
                 )?;
             }
             KeyCode::Char('a') => {
-                self.project_select = Some(ProjectSelect::new(self.connection, self.date)?);
+                self.project_select = Some(
+                    ProjectSelect::new(self.connection, self.date)
+                        .context("Could not load project selection")?,
+                );
             }
             KeyCode::Char('e') if has_selected_session => {
                 self.manual_session_dialog = Some(ManualSessionDialog::new(self.time_format));
@@ -244,9 +249,9 @@ impl<'a> SessionTable<'a> {
     fn handle_project_select_key_event(
         &mut self,
         key_event: KeyEvent,
-    ) -> Result<KeyEventResult, AppError> {
+    ) -> anyhow::Result<KeyEventResult> {
         let Some(project_select) = &mut self.project_select else {
-            return Err(AppError::InvalidState("No project select"));
+            return Err(anyhow::anyhow!("No project select"));
         };
 
         if key_event.code == KeyCode::Esc {
@@ -258,8 +263,12 @@ impl<'a> SessionTable<'a> {
             ProjectSelectEvent::Selected { project_id } => {
                 let tracking = Tracking::new(self.connection);
 
-                tracking.start(project_id)?;
-                self.sessions = tracking.list_all_sessions(self.date, None)?;
+                tracking
+                    .start(project_id)
+                    .with_context(|| format!("Could not start tracking project {project_id}"))?;
+                self.sessions = tracking
+                    .list_all_sessions(self.date, None)
+                    .with_context(|| format!("Could not refresh sessions on {}", self.date))?;
                 self.project_select = None;
             }
             ProjectSelectEvent::Ignore => {}
@@ -271,9 +280,9 @@ impl<'a> SessionTable<'a> {
     fn handle_manual_session_dialog_key_event(
         &mut self,
         key_event: KeyEvent,
-    ) -> Result<KeyEventResult, AppError> {
+    ) -> anyhow::Result<KeyEventResult> {
         let Some(dialog) = &mut self.manual_session_dialog else {
-            return Err(AppError::InvalidState("No project select"));
+            return Err(anyhow::anyhow!("No project select"));
         };
         match dialog.handle_key_event(key_event) {
             ManualSessionEvent::Save { total_seconds } => {
@@ -292,7 +301,7 @@ impl<'a> SessionTable<'a> {
     fn handle_alert_dialog_key_event(
         &mut self,
         key_event: KeyEvent,
-    ) -> Result<KeyEventResult, AppError> {
+    ) -> anyhow::Result<KeyEventResult> {
         match AlertDialog::handle_key_code(key_event.code) {
             AlertDialogEvent::Confirm => {
                 self.reset_session()?;
@@ -307,7 +316,7 @@ impl<'a> SessionTable<'a> {
         }
     }
 
-    fn handle_copy_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, AppError> {
+    fn handle_copy_key_event(&mut self, key_event: KeyEvent) -> anyhow::Result<KeyEventResult> {
         let mut did_match = true;
 
         match key_event.code {
@@ -328,9 +337,9 @@ impl<'a> SessionTable<'a> {
         Ok(KeyEventResult::Unused)
     }
 
-    fn open_selected_project(&mut self) -> Result<(), AppError> {
+    fn open_selected_project(&mut self) -> anyhow::Result<()> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState("No selected session"));
+            return Err(anyhow::anyhow!("No selected session"));
         };
 
         let config = Config::get()?;
@@ -339,12 +348,18 @@ impl<'a> SessionTable<'a> {
             return Ok(());
         };
 
-        open::that(opener.build_url(session.project.name.as_str()))?;
+        open::that(opener.build_url(session.project.name.as_str())).with_context(|| {
+            format!(
+                "Could not open project {} using {}",
+                session.project.id,
+                opener.name()
+            )
+        })?;
 
         Ok(())
     }
 
-    fn shift_date(&mut self, duration: Duration) -> Result<(), AppError> {
+    fn shift_date(&mut self, duration: Duration) -> anyhow::Result<()> {
         // Overflowing current date is not an issue, so using expect here is fine.
         self.date = self
             .date
@@ -352,19 +367,25 @@ impl<'a> SessionTable<'a> {
             .expect("Could not shift date");
 
         let tracking = Tracking::new(self.connection);
-        self.sessions = tracking.list_all_sessions(self.date, None)?;
+        self.sessions = tracking
+            .list_all_sessions(self.date, None)
+            .with_context(|| format!("Could not refresh sessions on {}", self.date))?;
 
         Ok(())
     }
 
-    fn toggle_session(&mut self) -> Result<(), AppError> {
+    fn toggle_session(&mut self) -> anyhow::Result<()> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState("No selected session"));
+            return Err(anyhow::anyhow!("No selected session"));
         };
 
         let tracking = Tracking::new(self.connection);
-        tracking.toggle(session.project.id)?;
-        self.sessions = tracking.list_all_sessions(self.date, None)?;
+        tracking
+            .toggle(session.project.id)
+            .with_context(|| format!("Could not toggle tracking project {}", session.project.id))?;
+        self.sessions = tracking
+            .list_all_sessions(self.date, None)
+            .with_context(|| format!("Could not refresh sessions on {}", self.date))?;
 
         Ok(())
     }
@@ -372,39 +393,57 @@ impl<'a> SessionTable<'a> {
     fn adjust_selected_session_by_fifteen_minutes(
         &mut self,
         operation: TimeAdjustmentOperation,
-    ) -> Result<(), AppError> {
+    ) -> anyhow::Result<()> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState("No selected session"));
+            return Err(anyhow::anyhow!("No selected session"));
         };
 
         let tracking = Tracking::new(self.connection);
-        tracking.adjust_by_fifteen_minutes(session.project.id, self.date, operation)?;
-        self.sessions = tracking.list_all_sessions(self.date, None)?;
+        tracking
+            .adjust_by_fifteen_minutes(session.project.id, self.date, operation)
+            .with_context(|| {
+                format!(
+                    "Could not adjust time for project {} on {}",
+                    session.project.id, self.date
+                )
+            })?;
+        self.sessions = tracking
+            .list_all_sessions(self.date, None)
+            .with_context(|| format!("Could not refresh sessions on {}", self.date))?;
 
         Ok(())
     }
 
-    fn reset_session(&mut self) -> Result<(), AppError> {
+    fn reset_session(&mut self) -> anyhow::Result<()> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState("No selected session"));
+            return Err(anyhow::anyhow!("No selected session"));
         };
 
         let tracking = Tracking::new(self.connection);
-        tracking.reset(session.project.id, self.date)?;
-        self.sessions = tracking.list_all_sessions(self.date, None)?;
+        tracking
+            .reset(session.project.id, self.date)
+            .with_context(|| {
+                format!(
+                    "Could not reset project {} on {}",
+                    session.project.id, self.date
+                )
+            })?;
+        self.sessions = tracking
+            .list_all_sessions(self.date, None)
+            .with_context(|| format!("Could not refresh sessions on {}", self.date))?;
 
         Ok(())
     }
 
-    fn cycle_time_format(&mut self) -> Result<(), AppError> {
+    fn cycle_time_format(&mut self) -> anyhow::Result<()> {
         self.time_format = self.time_format.get_next_format();
         Config::set_time_format(self.time_format)?;
         Ok(())
     }
 
-    fn copy_to_clipboard(&mut self, copy_content: CopyContent) -> Result<(), AppError> {
+    fn copy_to_clipboard(&mut self, copy_content: CopyContent) -> anyhow::Result<()> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState("No selected session"));
+            return Err(anyhow::anyhow!("No selected session"));
         };
 
         let text = match copy_content {
@@ -439,7 +478,10 @@ impl<'a> SessionTable<'a> {
             }
         };
 
-        self.clipboard.set_text(text)?;
+        let project_id = session.project.id;
+        self.clipboard
+            .set_text(text)
+            .with_context(|| format!("Could not copy project {project_id} to clipboard"))?;
 
         Ok(())
     }
@@ -454,15 +496,24 @@ impl<'a> SessionTable<'a> {
         self.sessions.get(selected_index)
     }
 
-    fn set_manual_session(&mut self, total_seconds: i64) -> Result<(), AppError> {
+    fn set_manual_session(&mut self, total_seconds: i64) -> anyhow::Result<()> {
         let Some(session) = self.get_selected_session() else {
-            return Err(AppError::InvalidState("No selected session"));
+            return Err(anyhow::anyhow!("No selected session"));
         };
 
         let tracking = Tracking::new(self.connection);
 
-        tracking.set(session.project.id, self.date, total_seconds)?;
-        self.sessions = tracking.list_all_sessions(self.date, None)?;
+        tracking
+            .set(session.project.id, self.date, total_seconds)
+            .with_context(|| {
+                format!(
+                    "Could not set time for project {} on {}",
+                    session.project.id, self.date
+                )
+            })?;
+        self.sessions = tracking
+            .list_all_sessions(self.date, None)
+            .with_context(|| format!("Could not refresh sessions on {}", self.date))?;
 
         Ok(())
     }
@@ -471,7 +522,7 @@ impl<'a> SessionTable<'a> {
     ///
     /// # Errors
     /// Returns an error if looking up the configuration fails
-    pub fn get_keybinds() -> Result<Vec<Keybind>, AppError> {
+    pub fn get_keybinds() -> anyhow::Result<Vec<Keybind>> {
         let mut binds = vec![
             Keybind::new("a".to_string(), "Track a new project".to_string()),
             Keybind::new("e".to_string(), "Edit tracked time".to_string()),
@@ -603,6 +654,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn get_keybinds() {
         let keybinds: Vec<String> = SessionTable::get_keybinds()
             .unwrap()
@@ -619,6 +671,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn get_keybinds_hint_text() {
         let keybinds: Vec<String> = SessionTable::get_keybinds_hint_text()
             .iter()
@@ -635,6 +688,7 @@ mod tests {
         use crate::tui::render_test_util::RenderTestUtil;
 
         #[test]
+        #[serial_test::serial]
         fn table_of_sessions() {
             let context = initialize_context();
 
@@ -665,6 +719,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn today_in_title() {
             let context = initialize_context();
 
@@ -695,6 +750,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn project_select() {
             let context = initialize_context();
 
@@ -731,6 +787,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn reset_alert_dialog() {
             let context = initialize_context();
 
@@ -767,6 +824,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn manual_session_dialog() {
             let context = initialize_context();
 
@@ -809,6 +867,7 @@ mod tests {
         use std::thread;
 
         #[test]
+        #[serial_test::serial]
         fn navigation() {
             let context = initialize_context();
 
@@ -881,6 +940,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn delete() {
             let context = initialize_context();
 
@@ -929,6 +989,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn toggle_session() {
             let context = initialize_context();
             let today = OffsetDateTime::now_utc().date();
@@ -1021,6 +1082,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn adjust_by_fifteen_minutes() {
             let context = initialize_context();
             let date = get_test_date();
@@ -1066,6 +1128,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn manual_session() {
             let context = initialize_context();
 
@@ -1103,6 +1166,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn project_select() {
             let context = initialize_context();
 
@@ -1139,7 +1203,31 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
+        #[allow(unsafe_code)]
         fn is_showing_copy_keybinds() {
+            // Cycling formats persists configuration; never use the developer's file.
+            struct RestoreConfigDir(Option<std::ffi::OsString>);
+            impl Drop for RestoreConfigDir {
+                fn drop(&mut self) {
+                    unsafe {
+                        if let Some(previous) = &self.0 {
+                            std::env::set_var(crate::core::constants::CONFIG_DIR_ENV, previous);
+                        } else {
+                            std::env::remove_var(crate::core::constants::CONFIG_DIR_ENV);
+                        }
+                    }
+                }
+            }
+            let config_directory = tempfile::tempdir().unwrap();
+            let _restore_config_dir =
+                RestoreConfigDir(std::env::var_os(crate::core::constants::CONFIG_DIR_ENV));
+            unsafe {
+                std::env::set_var(
+                    crate::core::constants::CONFIG_DIR_ENV,
+                    config_directory.path(),
+                );
+            }
             let context = initialize_context();
 
             let mut table = SessionTable::new(

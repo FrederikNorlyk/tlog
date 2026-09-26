@@ -288,7 +288,7 @@ pub enum TimeAdjustmentOperation {
 
 #[derive(Debug, Error)]
 pub enum TrackingError {
-    #[error("SQLite error: {0}")]
+    #[error("Could not update tracking records")]
     Sqlite(#[from] rusqlite::Error),
 
     #[error("no active start event for project {project_id}")]

@@ -1,4 +1,3 @@
-use crate::core::app_error::AppError;
 use crate::core::config::{Config, ConfigMetadata};
 use crate::core::issue_tracker::IssueTracker;
 use crate::db::project_repository::ProjectRepository;
@@ -8,6 +7,7 @@ use crate::tui::components::issue_finder_form::{IssueFinderEvent, IssueFinderFor
 use crate::tui::components::keybinds_dialog::Keybind;
 use crate::tui::components::project_form::{ProjectForm, ProjectFormEvent};
 use crate::tui::terminal_user_interface::KeyEventResult;
+use anyhow::Context;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
@@ -34,15 +34,12 @@ impl<'a> ProjectTable<'a> {
     ///
     /// # Errors
     /// Returns an error if querying project fails.
-    pub fn new(connection: &'a Connection) -> Result<Self, AppError> {
+    pub fn new(connection: &'a Connection) -> anyhow::Result<Self> {
         let project_repository = ProjectRepository::new(connection);
 
-        let mut projects = Vec::new();
-
-        project_repository.for_each(|project| {
-            projects.push(project);
-            Ok(())
-        })?;
+        let projects = project_repository
+            .list()
+            .with_context(|| "Could not load projects".to_string())?;
 
         Ok(Self {
             projects,
@@ -111,7 +108,7 @@ impl<'a> ProjectTable<'a> {
     /// # Errors
     ///
     /// Returns an error if executing user commands fails.
-    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<KeyEventResult, AppError> {
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> anyhow::Result<KeyEventResult> {
         if self.is_showing_deletion_alert_dialog {
             return self.handle_deletion_alert_dialog_key_event(key_event);
         } else if self.project_form.is_some() {
@@ -176,7 +173,7 @@ impl<'a> ProjectTable<'a> {
     fn handle_deletion_alert_dialog_key_event(
         &mut self,
         key_event: KeyEvent,
-    ) -> Result<KeyEventResult, AppError> {
+    ) -> anyhow::Result<KeyEventResult> {
         match AlertDialog::handle_key_code(key_event.code) {
             AlertDialogEvent::Confirm => {
                 self.delete_project()?;
@@ -194,9 +191,9 @@ impl<'a> ProjectTable<'a> {
     fn handle_project_form_key_event(
         &mut self,
         key_event: KeyEvent,
-    ) -> Result<KeyEventResult, AppError> {
+    ) -> anyhow::Result<KeyEventResult> {
         let Some(form) = &mut self.project_form else {
-            return Err(AppError::InvalidState("No project form"));
+            return Err(anyhow::anyhow!("No project form"));
         };
 
         match form.handle_key_event(key_event) {
@@ -224,9 +221,9 @@ impl<'a> ProjectTable<'a> {
     fn handle_issue_finder_form_key_event(
         &mut self,
         key_event: KeyEvent,
-    ) -> Result<KeyEventResult, AppError> {
+    ) -> anyhow::Result<KeyEventResult> {
         let Some(form) = &mut self.issue_finder_form else {
-            return Err(AppError::InvalidState("No issue finder form"));
+            return Err(anyhow::anyhow!("No issue finder form"));
         };
 
         match form.handle_key_event(key_event) {
@@ -243,35 +240,43 @@ impl<'a> ProjectTable<'a> {
         Ok(KeyEventResult::Consumed)
     }
 
-    fn delete_project(&mut self) -> Result<(), AppError> {
+    fn delete_project(&mut self) -> anyhow::Result<()> {
         let Some(project) = self.get_selected_project() else {
-            return Err(AppError::InvalidState("No selected project"));
+            return Err(anyhow::anyhow!("No selected project"));
         };
 
         let project_repository = ProjectRepository::new(self.connection);
-        project_repository.delete(project.id)?;
+        project_repository
+            .delete(project.id)
+            .with_context(|| format!("Could not delete project {}", project.id))?;
         self.refresh_projects()?;
 
         Ok(())
     }
 
-    fn open_selected_project(&mut self) -> Result<(), AppError> {
+    fn open_selected_project(&mut self) -> anyhow::Result<()> {
         let Some(project) = self.get_selected_project() else {
-            return Err(AppError::InvalidState("No selected project"));
+            return Err(anyhow::anyhow!("No selected project"));
         };
 
         let Some(opener) = self.config.opener() else {
             return Ok(());
         };
 
-        open::that(opener.build_url(project.name.as_str()))?;
+        open::that(opener.build_url(project.name.as_str())).with_context(|| {
+            format!(
+                "Could not open project {} using {}",
+                project.id,
+                opener.name()
+            )
+        })?;
 
         Ok(())
     }
 
-    fn edit_project(&mut self) -> Result<(), AppError> {
+    fn edit_project(&mut self) -> anyhow::Result<()> {
         let Some(project) = self.get_selected_project() else {
-            return Err(AppError::InvalidState("No selected project"));
+            return Err(anyhow::anyhow!("No selected project"));
         };
 
         self.project_form = Some(ProjectForm::new(
@@ -283,9 +288,11 @@ impl<'a> ProjectTable<'a> {
         Ok(())
     }
 
-    fn insert_project(&mut self, name: &str, description: Option<&str>) -> Result<(), AppError> {
+    fn insert_project(&mut self, name: &str, description: Option<&str>) -> anyhow::Result<()> {
         let project_repository = ProjectRepository::new(self.connection);
-        project_repository.insert(name, description)?;
+        project_repository
+            .insert(name, description)
+            .with_context(|| format!("Could not create project {name}"))?;
         self.refresh_projects()?;
 
         Ok(())
@@ -296,25 +303,24 @@ impl<'a> ProjectTable<'a> {
         id: i32,
         name: &str,
         description: Option<&str>,
-    ) -> Result<(), AppError> {
+    ) -> anyhow::Result<()> {
         let project_repository = ProjectRepository::new(self.connection);
         let project = Project::new(id, name, description);
 
-        project_repository.update(&project)?;
+        project_repository
+            .update(&project)
+            .with_context(|| format!("Could not update project {id}"))?;
         self.refresh_projects()?;
 
         Ok(())
     }
 
-    fn refresh_projects(&mut self) -> Result<(), AppError> {
+    fn refresh_projects(&mut self) -> anyhow::Result<()> {
         let project_repository = ProjectRepository::new(self.connection);
 
-        self.projects.clear();
-
-        project_repository.for_each(|project| {
-            self.projects.push(project);
-            Ok(())
-        })?;
+        self.projects = project_repository
+            .list()
+            .with_context(|| "Could not load projects".to_string())?;
 
         Ok(())
     }
@@ -329,7 +335,7 @@ impl<'a> ProjectTable<'a> {
     ///
     /// # Errors
     /// Returns an error if looking up the configuration fails
-    pub fn get_keybinds(&self) -> Result<Vec<Keybind>, AppError> {
+    pub fn get_keybinds(&self) -> anyhow::Result<Vec<Keybind>> {
         let mut binds = vec![
             Keybind::new("e".to_string(), "Edit project".to_string()),
             Keybind::new("d".to_string(), "Delete project".to_string()),
@@ -415,6 +421,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn get_keybinds() {
         let context = initialize_context();
         let table = ProjectTable::new(context.connection()).unwrap();
@@ -435,6 +442,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn get_keybinds_hint_text() {
         let keybinds: Vec<String> = ProjectTable::get_keybinds_hint_text()
             .iter()
@@ -451,6 +459,7 @@ mod tests {
         use crate::tui::render_test_util::RenderTestUtil;
 
         #[test]
+        #[serial_test::serial]
         fn table_of_projects() {
             let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
@@ -471,6 +480,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn project_form() {
             let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
@@ -504,6 +514,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn delete_dialog() {
             let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
@@ -538,6 +549,7 @@ mod tests {
         use super::*;
 
         #[test]
+        #[serial_test::serial]
         fn is_showing_delete_alert_dialog() {
             let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
@@ -570,6 +582,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn is_showing_project_form() {
             let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
@@ -612,6 +625,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn edit_project() {
             let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
@@ -679,6 +693,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn navigation() {
             let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
@@ -718,6 +733,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn force_delete() {
             let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();
@@ -736,6 +752,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn unused_key() {
             let context = initialize_context();
             let mut table = ProjectTable::new(context.connection()).unwrap();

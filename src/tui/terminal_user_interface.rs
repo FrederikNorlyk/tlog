@@ -1,9 +1,9 @@
-use crate::core::app_error::AppError;
 use crate::core::clipboard::clipboard_backend::ClipboardBackend;
 use crate::core::config::Config;
 use crate::tui::components::keybinds_dialog::{KeybindDialogEvent, KeybindsDialog};
 use crate::tui::components::project_table::ProjectTable;
 use crate::tui::components::session_table::SessionTable;
+use anyhow::Context;
 use crossterm::event;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -39,7 +39,7 @@ impl<'a> TerminalUserInterface<'a> {
     pub fn new(
         connection: &'a Connection,
         clipboard: Box<dyn ClipboardBackend>,
-    ) -> Result<Self, AppError> {
+    ) -> anyhow::Result<Self> {
         let time_format = Config::get()?.time_format();
         let date = OffsetDateTime::now_utc().date();
 
@@ -61,16 +61,18 @@ impl<'a> TerminalUserInterface<'a> {
     ///
     /// Returns an error if drawing to the terminal fails, or if reading an event
     /// from the terminal input fails.
-    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), AppError> {
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
         let tick_rate = Duration::from_secs(1);
         let mut last_tick = Instant::now();
 
         while !self.exit {
-            terminal.draw(|frame| self.draw(frame))?;
+            terminal
+                .draw(|frame| self.draw(frame))
+                .context("Could not draw terminal interface")?;
 
             let timeout = tick_rate.saturating_sub(last_tick.elapsed());
 
-            if event::poll(timeout)? {
+            if event::poll(timeout).context("Could not poll terminal input")? {
                 self.handle_events()?;
             }
 
@@ -91,8 +93,8 @@ impl<'a> TerminalUserInterface<'a> {
         frame.render_widget(self, frame.area());
     }
 
-    fn handle_events(&mut self) -> Result<(), AppError> {
-        match event::read()? {
+    fn handle_events(&mut self) -> anyhow::Result<()> {
+        match event::read().context("Could not read terminal input")? {
             // it's important to check that the event is a key press event as
             // crossterm also emits key release and repeat events on Windows.
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
@@ -104,7 +106,7 @@ impl<'a> TerminalUserInterface<'a> {
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<(), AppError> {
+    fn handle_key_event(&mut self, key_event: KeyEvent) -> anyhow::Result<()> {
         if let Some(keybind_dialog) = &mut self.keybind_dialog {
             match keybind_dialog.handle_key_event(key_event) {
                 KeybindDialogEvent::Closed => self.keybind_dialog = None,
@@ -139,7 +141,7 @@ impl<'a> TerminalUserInterface<'a> {
         Ok(())
     }
 
-    fn show_keybind_dialog_for_active_widget(&mut self) -> Result<(), AppError> {
+    fn show_keybind_dialog_for_active_widget(&mut self) -> anyhow::Result<()> {
         let keybinds = match self.active_widget {
             ActiveWidget::SessionTable => SessionTable::get_keybinds()?,
             ActiveWidget::ProjectTable => self.project_table.get_keybinds()?,
@@ -311,6 +313,7 @@ mod tests {
         use super::*;
 
         #[test]
+        #[serial_test::serial]
         fn keybind_dialog() {
             let context = DBTestContext::new().unwrap();
             let mut tui = TerminalUserInterface::new(
@@ -332,6 +335,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn active_widget() {
             let context = DBTestContext::new().unwrap();
             let mut tui = TerminalUserInterface::new(
@@ -348,6 +352,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn quit() {
             let context = DBTestContext::new().unwrap();
             let mut tui = TerminalUserInterface::new(
@@ -394,6 +399,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn keyboard_hint_text_for_session_table() {
             let context = DBTestContext::new().unwrap();
             let mut tui = TerminalUserInterface::new(
@@ -419,6 +425,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn keyboard_hint_text_for_project_table() {
             let context = DBTestContext::new().unwrap();
             let mut tui = TerminalUserInterface::new(
@@ -447,6 +454,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn with_data() {
             let context = initialize_context();
             let mut tui = TerminalUserInterface::new(
@@ -472,6 +480,7 @@ mod tests {
         }
 
         #[test]
+        #[serial_test::serial]
         fn copy_keybind_overlay() {
             let context = initialize_context();
             let mut tui = TerminalUserInterface::new(

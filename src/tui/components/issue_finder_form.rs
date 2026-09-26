@@ -1,8 +1,9 @@
-use crate::core::app_error::AppError;
+use crate::core::diagnostic;
 use crate::core::issue_tracker::issue::Issue;
 use crate::core::issue_tracker::issue_provider::IssueProvider;
 use crate::model::project::Project;
 use crate::tui::components::dialog::Dialog;
+use anyhow::Context;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -60,7 +61,7 @@ impl IssueFinderForm<'_> {
                         };
                     }
                     Ok(None) => self.error_text = Some("Could not find the issue".to_string()),
-                    Err(e) => self.error_text = Some(e.to_string()),
+                    Err(e) => self.error_text = Some(diagnostic::report(&e)),
                 }
             }
             _ => {
@@ -98,10 +99,14 @@ impl IssueFinderForm<'_> {
             .to_string()
     }
 
-    fn find_issue(&self) -> Result<Option<Issue>, AppError> {
+    fn find_issue(&self) -> anyhow::Result<Option<Issue>> {
         let issue_id = self.get_field_value();
 
-        let Some(issue) = self.issue_provider.fetch_issue(issue_id.as_str())? else {
+        let Some(issue) = self
+            .issue_provider
+            .fetch_issue(issue_id.as_str())
+            .with_context(|| format!("Could not find issue {issue_id}"))?
+        else {
             return Ok(None);
         };
 
@@ -112,6 +117,7 @@ impl IssueFinderForm<'_> {
 impl Widget for &IssueFinderForm<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let dialog = Dialog::constrained(Constraint::Percentage(90), Constraint::Length(10));
+
         let inner = dialog.render(area, buf);
 
         let chunks = Layout::default()
@@ -143,7 +149,7 @@ mod tests {
     }
 
     impl IssueProvider for MockIssueTracker {
-        fn fetch_issue(&self, _id: &str) -> Result<Option<Issue>, AppError> {
+        fn fetch_issue(&self, _id: &str) -> anyhow::Result<Option<Issue>> {
             Ok(self.issue.clone())
         }
     }
