@@ -28,8 +28,21 @@ Run the installer script with the following one-liner (downloads the installer a
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command 'Invoke-WebRequest "https://raw.githubusercontent.com/FrederikNorlyk/tlog/main/scripts/windows-install.ps1" -OutFile "$env:TEMP\tlog-install.ps1"; & "$env:TEMP\tlog-install.ps1"'
 ```
+# Usage
 
-## Directory layout
+To launch the TUI run the command: 
+
+```bash
+tlog
+```
+
+You can also use the CLI, see:
+
+```bash
+tlog --help
+```
+
+# Directory layout
 
 tLog uses the [directories::ProjectDirs](https://docs.rs/directories/latest/directories/struct.ProjectDirs.html) crate
 to follow OS conventions for application storage locations.
@@ -50,7 +63,7 @@ The default locations are as follows
 - `%AppData%\FrederikNorlyk\tlog\data` for data
 - `%AppData%\FrederikNorlyk\tlog\config` for configuration
 
-### Configuration
+# Configuration
 
 The configuration directory stores a single TOML file called `tlog.toml`, used to control application behavior.
 
@@ -80,14 +93,14 @@ Supported settings:
 | `opener.url`              | string | URL template. `%s` is replaced with the selected issue/project name.                                                               |
 | `opener.name`             | string | Name displayed for the opener.                                                                                              |
 
-#### Override config directory
+## Override config directory
 
 You can override the default config location by setting the environment variable `TLOG_CONFIG_DIR`.
 
-### Data
+# Data
 
 The data directory stores the SQLite database used for tracking time entries.
 
-#### Override data directory
+## Override data directory
 
 You can override the default data location by setting the environment variable `TLOG_DATA_DIR`.
