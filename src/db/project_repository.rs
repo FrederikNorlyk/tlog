@@ -1,4 +1,5 @@
 use crate::db::database::Repository;
+use crate::model::ids::ProjectId;
 use crate::model::project::Project;
 use rusqlite::{Connection, OptionalExtension, Row, named_params, params_from_iter};
 use time::Date;
@@ -20,13 +21,13 @@ impl<'a> ProjectRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the insert statement, for
     /// example because the database connection is invalid, the `project` table
     /// does not exist, or the provided data violates a database constraint.
-    pub fn insert(&self, name: &str, description: Option<&str>) -> rusqlite::Result<i64> {
+    pub fn insert(&self, name: &str, description: Option<&str>) -> rusqlite::Result<ProjectId> {
         self.connection.execute(
             "INSERT INTO project (name, description) VALUES (:name, :description)",
             named_params! {":name": name, ":description": description},
         )?;
 
-        Ok(self.connection.last_insert_rowid())
+        Ok(ProjectId(self.connection.last_insert_rowid()))
     }
 
     /// Updates an existing project.
@@ -56,7 +57,7 @@ impl<'a> ProjectRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the delete statement, for
     /// example because the database connection is invalid or the `project` table
     /// does not exist.
-    pub fn delete(&self, id: i32) -> rusqlite::Result<bool> {
+    pub fn delete(&self, id: ProjectId) -> rusqlite::Result<bool> {
         let deleted_count = self.connection.execute(
             "DELETE FROM project WHERE id = (:id)",
             named_params! {":id": id},
@@ -72,7 +73,7 @@ impl<'a> ProjectRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the query, if the `project`
     /// table does not exist, if no project exists with the given ID, or if the
     /// returned row cannot be converted into a [`Project`].
-    pub fn get(&self, id: i32) -> rusqlite::Result<Option<Project>> {
+    pub fn get(&self, id: ProjectId) -> rusqlite::Result<Option<Project>> {
         self.connection
             .query_row(
                 "SELECT id, name, description FROM project WHERE id = :id",
@@ -87,7 +88,7 @@ impl<'a> ProjectRepository<'a> {
     /// # Errors
     ///
     /// Returns database errors from query execution or row mapping.
-    pub fn find_by_ids(&self, ids: &[i32]) -> rusqlite::Result<Vec<Project>> {
+    pub fn find_by_ids(&self, ids: &[ProjectId]) -> rusqlite::Result<Vec<Project>> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -200,24 +201,24 @@ mod tests {
         let project_repository = ProjectRepository::new(context.connection());
 
         let id = project_repository.insert("Just a name", None)?;
-        assert_eq!(id, 1);
+        assert_eq!(id, ProjectId(1));
 
         let id = project_repository.insert("Has a desc", Some("Desc here"))?;
-        assert_eq!(id, 2);
+        assert_eq!(id, ProjectId(2));
 
         let project_1 = project_repository
-            .get(1)?
+            .get(ProjectId(1))?
             .expect("Should have found project 1");
 
-        assert_eq!(project_1.id, 1);
+        assert_eq!(project_1.id, ProjectId(1));
         assert_eq!(project_1.name, "Just a name");
         assert_eq!(project_1.description, None);
 
         let project_2 = project_repository
-            .get(2)?
+            .get(ProjectId(2))?
             .expect("Should have found project 2");
 
-        assert_eq!(project_2.id, 2);
+        assert_eq!(project_2.id, ProjectId(2));
         assert_eq!(project_2.name, "Has a desc");
 
         assert_eq!(
@@ -259,7 +260,9 @@ mod tests {
 
         project_repository.insert("Original", Some("Original desc"))?;
 
-        let mut project = project_repository.get(1)?.expect("Project should exist");
+        let mut project = project_repository
+            .get(ProjectId(1))?
+            .expect("Project should exist");
 
         project.name = "Updated".to_string();
         project.description = Some("Updated desc".to_string());
@@ -267,7 +270,7 @@ mod tests {
         project_repository.update(&project)?;
 
         let updated = project_repository
-            .get(1)?
+            .get(ProjectId(1))?
             .expect("Project should still exist");
 
         assert_eq!(updated.name, "Updated");
@@ -279,7 +282,7 @@ mod tests {
         project_repository.update(&project)?;
 
         let updated = project_repository
-            .get(1)?
+            .get(ProjectId(1))?
             .expect("Project should still exist");
 
         assert_eq!(updated.name, "Updated");
@@ -295,11 +298,11 @@ mod tests {
 
         project_repository.insert("Project", None)?;
 
-        assert!(project_repository.get(1)?.is_some());
+        assert!(project_repository.get(ProjectId(1))?.is_some());
 
-        assert!(project_repository.delete(1)?);
+        assert!(project_repository.delete(ProjectId(1))?);
 
-        assert!(project_repository.get(1)?.is_none());
+        assert!(project_repository.get(ProjectId(1))?.is_none());
 
         Ok(())
     }
@@ -309,7 +312,7 @@ mod tests {
         let context = DBTestContext::new()?;
         let project_repository = ProjectRepository::new(context.connection());
 
-        assert!(!project_repository.delete(999)?);
+        assert!(!project_repository.delete(ProjectId(999))?);
 
         Ok(())
     }
@@ -319,7 +322,7 @@ mod tests {
         let context = DBTestContext::new()?;
         let project_repository = ProjectRepository::new(context.connection());
 
-        assert!(project_repository.get(999)?.is_none());
+        assert!(project_repository.get(ProjectId(999))?.is_none());
 
         Ok(())
     }
@@ -421,7 +424,7 @@ mod tests {
 
             project_repository.insert("Blocked Project", None)?;
 
-            manual_session_repository.upsert(1, test_date(), 3600)?;
+            manual_session_repository.upsert(ProjectId(1), test_date(), 3600)?;
 
             let results = project_repository.search_by_name("blocked", test_date())?;
 
@@ -449,7 +452,7 @@ mod tests {
 
             let event_repository = EventRepository::new(connection);
 
-            event_repository.insert(1, Start, timestamp)?;
+            event_repository.insert(ProjectId(1), Start, timestamp)?;
 
             let results = project_repository.search_by_name("event", date)?;
 

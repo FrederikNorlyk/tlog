@@ -1,4 +1,5 @@
 use crate::db::project_repository::ProjectRepository;
+use crate::model::ids::ProjectId;
 use crate::model::project::Project;
 use crate::tui::components::dialog::Dialog;
 use anyhow::Context;
@@ -87,7 +88,7 @@ impl<'a> ProjectSelect<'a> {
         Ok(ProjectSelectEvent::Ignore)
     }
 
-    fn get_selected_project_id(&mut self) -> Option<i32> {
+    fn get_selected_project_id(&mut self) -> Option<ProjectId> {
         let selected_index = self.state.selected()?;
 
         if self.projects.len() <= selected_index {
@@ -140,7 +141,7 @@ impl<'a> ProjectSelect<'a> {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum ProjectSelectEvent {
-    Selected { project_id: i32 },
+    Selected { project_id: ProjectId },
     Ignore,
 }
 
@@ -200,19 +201,19 @@ mod tests {
 
             select.handle_key_event(ctrl_key('k')).unwrap();
             let selected_id = select.get_selected_project_id().unwrap();
-            assert_eq!(selected_id, 3);
+            assert_eq!(selected_id, ProjectId(3));
 
             select.handle_key_event(ctrl_key('j')).unwrap();
             let selected_id = select.get_selected_project_id().unwrap();
-            assert_eq!(selected_id, 2);
+            assert_eq!(selected_id, ProjectId(2));
 
             select.handle_key_event(key(KeyCode::Up)).unwrap();
             let selected_id = select.get_selected_project_id().unwrap();
-            assert_eq!(selected_id, 3);
+            assert_eq!(selected_id, ProjectId(3));
 
             select.handle_key_event(key(KeyCode::Down)).unwrap();
             let selected_id = select.get_selected_project_id().unwrap();
-            assert_eq!(selected_id, 2);
+            assert_eq!(selected_id, ProjectId(2));
         }
 
         #[test]
@@ -226,7 +227,7 @@ mod tests {
 
             assert!(matches!(
                 result,
-                ProjectSelectEvent::Selected { project_id } if project_id == 2
+                ProjectSelectEvent::Selected { project_id } if project_id == ProjectId(2)
             ));
         }
 
@@ -258,7 +259,7 @@ mod tests {
 
             let project_id = select.get_selected_project_id().unwrap();
 
-            assert_eq!(project_id, 3);
+            assert_eq!(project_id, ProjectId(3));
         }
 
         #[test]

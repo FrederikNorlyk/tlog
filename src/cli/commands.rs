@@ -1,5 +1,6 @@
 use crate::cli::config_command::ConfigCommand;
 use crate::cli::project_command::ProjectCommand;
+use crate::model::ids::ProjectId;
 use clap::{Parser, Subcommand};
 use thiserror::Error;
 use time::Date;
@@ -30,19 +31,19 @@ pub enum Command {
     Start {
         /// Id of the project to start tracking
         #[arg(long = "project", short = 'p')]
-        project_id: i32,
+        project_id: ProjectId,
     },
     /// Stop time tracking of the given project
     Stop {
         /// Id of the project to stop tracking
         #[arg(long = "project", short = 'p')]
-        project_id: i32,
+        project_id: ProjectId,
     },
     /// Manually set time spent on a project
     Set {
         /// ID of the project to update
         #[arg(long = "project", short = 'p')]
-        project_id: i32,
+        project_id: ProjectId,
 
         /// Date in YYYY-MM-DD format
         #[arg(long, short = 'd', value_parser = parse_date)]
@@ -56,7 +57,7 @@ pub enum Command {
     Reset {
         /// Id of the project to reset
         #[arg(long = "project", short = 'p')]
-        project_id: i32,
+        project_id: ProjectId,
 
         /// Date in YYYY-MM-DD format
         #[arg(value_parser = parse_date)]

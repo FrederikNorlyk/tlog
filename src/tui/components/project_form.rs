@@ -1,3 +1,4 @@
+use crate::model::ids::ProjectId;
 use crate::tui::components::dialog::Dialog;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
@@ -8,7 +9,7 @@ use ratatui::widgets::{Block, Borders};
 use ratatui_textarea::TextArea;
 
 pub struct ProjectForm<'a> {
-    id: Option<i32>,
+    id: Option<ProjectId>,
     name_text_area: TextArea<'a>,
     description_text_area: TextArea<'a>,
     is_name_focused: bool,
@@ -16,7 +17,7 @@ pub struct ProjectForm<'a> {
 
 impl ProjectForm<'_> {
     #[must_use]
-    pub fn new(id: Option<i32>, name: Option<String>, description: Option<String>) -> Self {
+    pub fn new(id: Option<ProjectId>, name: Option<String>, description: Option<String>) -> Self {
         let mut name_text_area = TextArea::new(vec![name.unwrap_or_default()]);
         name_text_area.set_style(Style::default().fg(Color::DarkGray));
 
@@ -162,7 +163,7 @@ pub enum ProjectFormEvent {
         description: Option<String>,
     },
     Update {
-        id: i32,
+        id: ProjectId,
         name: String,
         description: Option<String>,
     },

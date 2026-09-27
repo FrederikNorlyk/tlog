@@ -1,5 +1,6 @@
 use crate::db::database::Repository;
 use crate::model::event::{Event, EventType};
+use crate::model::ids::{EventId, ProjectId};
 use rusqlite::{Connection, OptionalExtension, Result, named_params};
 use time::Date;
 
@@ -20,7 +21,12 @@ impl<'a> EventRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the insert statement, for
     /// example, because the database connection is invalid, the `event` table
     /// does not exist, or the provided data violates a database constraint.
-    pub fn insert(&self, project_id: i32, event_type: EventType, timestamp: i64) -> Result<()> {
+    pub fn insert(
+        &self,
+        project_id: ProjectId,
+        event_type: EventType,
+        timestamp: i64,
+    ) -> Result<()> {
         self.connection.execute(
             "INSERT INTO event (project_id, event_type, timestamp)
             VALUES (:project_id, :event_type, :timestamp)",
@@ -37,7 +43,7 @@ impl<'a> EventRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the delete statement, for
     /// example, because the database connection is invalid or the `event` table
     /// does not exist.
-    pub fn delete(&self, id: i32) -> Result<bool> {
+    pub fn delete(&self, id: EventId) -> Result<bool> {
         let deleted_count = self.connection.execute(
             "DELETE FROM event WHERE id = (:id)",
             named_params! {":id": id},
@@ -53,7 +59,7 @@ impl<'a> EventRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the delete statement, for
     /// example, because the database connection is invalid or the `event` table
     /// does not exist.
-    pub fn delete_all_in(&self, project_id: i32, date: Date) -> Result<bool> {
+    pub fn delete_all_in(&self, project_id: ProjectId, date: Date) -> Result<bool> {
         let deleted_count = self.connection.execute(
             "DELETE FROM event
             WHERE
@@ -73,7 +79,7 @@ impl<'a> EventRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the query, if the `event`
     /// table does not exist, if no event exists with the given ID, or if the
     /// returned row cannot be converted into an [`Event`].
-    pub fn get(&self, id: i32) -> Result<Option<Event>> {
+    pub fn get(&self, id: EventId) -> Result<Option<Event>> {
         self.connection
             .query_row(
                 "SELECT id, project_id, event_type, timestamp FROM event WHERE id = :id",
@@ -90,7 +96,7 @@ impl<'a> EventRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if the underlying `SQLite` query fails.
-    pub fn has_started_event(&self, project_id: i32) -> Result<bool> {
+    pub fn has_started_event(&self, project_id: ProjectId) -> Result<bool> {
         let exists: bool = self.connection.query_row(
             "SELECT EXISTS(
             SELECT 1
@@ -162,7 +168,12 @@ impl<'a> EventRepository<'a> {
     /// # Errors
     ///
     /// Returns an error if the query fails or row mapping fails.
-    pub fn for_each<F>(&self, date: Date, project_id: Option<i32>, mut consumer: F) -> Result<()>
+    pub fn for_each<F>(
+        &self,
+        date: Date,
+        project_id: Option<ProjectId>,
+        mut consumer: F,
+    ) -> Result<()>
     where
         F: FnMut(Event),
     {
@@ -245,14 +256,14 @@ mod tests {
         let event_repository = EventRepository::new(context.connection());
         let timestamp = 1_780_140_094;
 
-        event_repository.insert(1, Start, timestamp)?;
+        event_repository.insert(ProjectId(1), Start, timestamp)?;
 
         let event = event_repository
-            .get(1)?
+            .get(EventId(1))?
             .expect("inserted event should exist");
 
-        assert_eq!(event.id, 1);
-        assert_eq!(event.project_id, 1);
+        assert_eq!(event.id, EventId(1));
+        assert_eq!(event.project_id, ProjectId(1));
         assert!(matches!(event.event_type, Start));
         assert_eq!(event.timestamp, timestamp);
 
@@ -264,7 +275,7 @@ mod tests {
         let context = initialize_context()?;
         let event_repository = EventRepository::new(context.connection());
 
-        let event = event_repository.get(999)?;
+        let event = event_repository.get(EventId(999))?;
 
         assert!(event.is_none());
 
@@ -276,14 +287,14 @@ mod tests {
         let context = initialize_context()?;
         let event_repository = EventRepository::new(context.connection());
 
-        event_repository.insert(1, Start, 1_780_140_094)?;
+        event_repository.insert(ProjectId(1), Start, 1_780_140_094)?;
 
-        assert!(event_repository.get(1)?.is_some());
+        assert!(event_repository.get(EventId(1))?.is_some());
 
-        let deleted = event_repository.delete(1)?;
+        let deleted = event_repository.delete(EventId(1))?;
 
         assert!(deleted);
-        assert!(event_repository.get(1)?.is_none());
+        assert!(event_repository.get(EventId(1))?.is_none());
 
         Ok(())
     }
@@ -293,7 +304,7 @@ mod tests {
         let context = initialize_context()?;
         let event_repository = EventRepository::new(context.connection());
 
-        let deleted = event_repository.delete(999)?;
+        let deleted = event_repository.delete(EventId(999))?;
 
         assert!(!deleted);
 
@@ -312,15 +323,15 @@ mod tests {
             .assume_utc()
             .unix_timestamp();
 
-        event_repository.insert(1, Start, timestamp)?;
+        event_repository.insert(ProjectId(1), Start, timestamp)?;
         timestamp += 500;
-        event_repository.insert(1, Stop, timestamp)?;
+        event_repository.insert(ProjectId(1), Stop, timestamp)?;
         timestamp += 500;
-        event_repository.insert(2, Start, timestamp)?;
+        event_repository.insert(ProjectId(2), Start, timestamp)?;
         timestamp += 500;
-        event_repository.insert(2, Stop, timestamp)?;
+        event_repository.insert(ProjectId(2), Stop, timestamp)?;
 
-        let mut did_delete = event_repository.delete_all_in(1, start_date)?;
+        let mut did_delete = event_repository.delete_all_in(ProjectId(1), start_date)?;
 
         assert!(did_delete);
 
@@ -329,7 +340,7 @@ mod tests {
         assert_eq!(events.len(), 2);
 
         for event in events {
-            assert_eq!(event.project_id, 2);
+            assert_eq!(event.project_id, ProjectId(2));
         }
 
         let next_date = Date::from_calendar_date(2024, Month::September, 21)?;
@@ -339,14 +350,14 @@ mod tests {
             .unix_timestamp();
 
         // Event with id 5
-        event_repository.insert(2, Start, next_date_timestamp)?;
+        event_repository.insert(ProjectId(2), Start, next_date_timestamp)?;
 
         next_date_timestamp += 500;
 
         // Event with id 6
-        event_repository.insert(2, Stop, next_date_timestamp)?;
+        event_repository.insert(ProjectId(2), Stop, next_date_timestamp)?;
 
-        did_delete = event_repository.delete_all_in(2, start_date)?;
+        did_delete = event_repository.delete_all_in(ProjectId(2), start_date)?;
 
         assert!(did_delete);
 
@@ -355,14 +366,14 @@ mod tests {
         assert_eq!(events.len(), 2);
 
         let start_event = events.first().expect("Could not get event");
-        assert_eq!(start_event.id, 5);
-        assert_eq!(start_event.project_id, 2);
+        assert_eq!(start_event.id, EventId(5));
+        assert_eq!(start_event.project_id, ProjectId(2));
         assert_eq!(start_event.event_type, Start);
         assert_eq!(start_event.timestamp, 1_726_885_800);
 
         let end_event = events.get(1).expect("Could not get event");
-        assert_eq!(end_event.id, 6);
-        assert_eq!(end_event.project_id, 2);
+        assert_eq!(end_event.id, EventId(6));
+        assert_eq!(end_event.project_id, ProjectId(2));
         assert_eq!(end_event.event_type, Stop);
         assert_eq!(end_event.timestamp, 1_726_886_300);
 
@@ -376,18 +387,18 @@ mod tests {
 
         let mut timestamp = 1_780_140_094;
 
-        event_repository.insert(1, Start, timestamp)?;
+        event_repository.insert(ProjectId(1), Start, timestamp)?;
         timestamp += 300;
-        event_repository.insert(1, Stop, timestamp)?;
+        event_repository.insert(ProjectId(1), Stop, timestamp)?;
 
         timestamp += 700;
-        event_repository.insert(2, Start, timestamp)?;
+        event_repository.insert(ProjectId(2), Start, timestamp)?;
 
         let started_event = event_repository
             .get_started_event()?
             .expect("expected a started event");
 
-        assert_eq!(started_event.project_id, 2);
+        assert_eq!(started_event.project_id, ProjectId(2));
         assert!(matches!(started_event.event_type, Start));
         assert_eq!(started_event.timestamp, timestamp);
 
@@ -399,7 +410,7 @@ mod tests {
         let context = initialize_context()?;
         let event_repository = EventRepository::new(context.connection());
 
-        let result = event_repository.insert(999, Start, 1_780_140_094);
+        let result = event_repository.insert(ProjectId(999), Start, 1_780_140_094);
 
         assert!(result.is_err());
 
@@ -414,23 +425,23 @@ mod tests {
 
         let mut timestamp = 1_780_140_094;
 
-        event_repository.insert(1, Start, timestamp)?;
+        event_repository.insert(ProjectId(1), Start, timestamp)?;
         timestamp += 300;
-        event_repository.insert(1, Stop, timestamp)?;
+        event_repository.insert(ProjectId(1), Stop, timestamp)?;
 
         timestamp += 700;
-        event_repository.insert(2, Start, timestamp)?;
+        event_repository.insert(ProjectId(2), Start, timestamp)?;
 
-        assert!(event_repository.get(1)?.is_some());
-        assert!(event_repository.get(2)?.is_some());
-        assert!(event_repository.get(3)?.is_some());
+        assert!(event_repository.get(EventId(1))?.is_some());
+        assert!(event_repository.get(EventId(2))?.is_some());
+        assert!(event_repository.get(EventId(3))?.is_some());
 
-        let deleted = project_repository.delete(1)?;
+        let deleted = project_repository.delete(ProjectId(1))?;
 
         assert!(deleted);
-        assert!(event_repository.get(1)?.is_none());
-        assert!(event_repository.get(2)?.is_none());
-        assert!(event_repository.get(3)?.is_some());
+        assert!(event_repository.get(EventId(1))?.is_none());
+        assert!(event_repository.get(EventId(2))?.is_none());
+        assert!(event_repository.get(EventId(3))?.is_some());
 
         Ok(())
     }

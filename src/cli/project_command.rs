@@ -1,4 +1,5 @@
 use crate::db::project_repository::ProjectRepository;
+use crate::model::ids::ProjectId;
 use anyhow::Context;
 use clap::Subcommand;
 use std::io::Write;
@@ -22,7 +23,7 @@ pub enum ProjectCommand {
     /// Update an existing project by its ID.
     Update {
         /// ID of the project to update.
-        id: i32,
+        id: ProjectId,
 
         /// New project name.
         #[arg(
@@ -49,7 +50,7 @@ pub enum ProjectCommand {
     #[command(visible_alias = "rm")]
     Delete {
         /// ID of the project to delete.
-        id: i32,
+        id: ProjectId,
     },
     /// List all projects.
     #[command(visible_alias = "ls")]
@@ -138,7 +139,7 @@ pub fn handle_project_command<W: Write>(
 #[derive(Debug, Error)]
 pub enum ProjectCommandError {
     #[error("Project with id {project_id} was not found")]
-    ProjectNotFound { project_id: i32 },
+    ProjectNotFound { project_id: ProjectId },
 }
 
 #[cfg(test)]
@@ -197,7 +198,7 @@ mod tests {
             assert!(matches!(
                 command,
                 ProjectCommand::Update {
-                    id: 10,
+                    id: ProjectId(10),
                     name: Some(name),
                     description: None,
                     clear_description: false,
@@ -212,7 +213,7 @@ mod tests {
             assert!(matches!(
                 command,
                 ProjectCommand::Update {
-                    id: 10,
+                    id: ProjectId(10),
                     clear_description: true,
                     ..
                 }
@@ -241,14 +242,20 @@ mod tests {
         fn delete_command() {
             let command = parse(&["tlog", "delete", "5"]);
 
-            assert!(matches!(command, ProjectCommand::Delete { id: 5 }));
+            assert!(matches!(
+                command,
+                ProjectCommand::Delete { id: ProjectId(5) }
+            ));
         }
 
         #[test]
         fn delete_alias() {
             let command = parse(&["tlog", "rm", "5"]);
 
-            assert!(matches!(command, ProjectCommand::Delete { id: 5 }));
+            assert!(matches!(
+                command,
+                ProjectCommand::Delete { id: ProjectId(5) }
+            ));
         }
     }
 
@@ -291,9 +298,9 @@ mod tests {
                     &mut vec![],
                 )?;
 
-                let project = repository.get(1)?.expect("Project should exist");
+                let project = repository.get(ProjectId(1))?.expect("Project should exist");
 
-                assert_eq!(project.id, 1);
+                assert_eq!(project.id, ProjectId(1));
                 assert_eq!(project.name, "My Project");
                 assert_eq!(project.description.as_deref(), Some("Description"));
 
@@ -314,7 +321,7 @@ mod tests {
                     &mut vec![],
                 )?;
 
-                let project = repository.get(1)?.expect("Project should exist");
+                let project = repository.get(ProjectId(1))?.expect("Project should exist");
 
                 assert_eq!(project.name, "My Project");
                 assert_eq!(project.description, None);
@@ -335,7 +342,7 @@ mod tests {
 
                 handle_project_command(
                     ProjectCommand::Update {
-                        id: 1,
+                        id: ProjectId(1),
                         name: Some("Updated".into()),
                         description: None,
                         clear_description: false,
@@ -344,7 +351,7 @@ mod tests {
                     &mut vec![],
                 )?;
 
-                let project = repository.get(1)?.expect("Project should exist");
+                let project = repository.get(ProjectId(1))?.expect("Project should exist");
 
                 assert_eq!(project.name, "Updated");
                 assert_eq!(project.description.as_deref(), Some("Description"));
@@ -361,7 +368,7 @@ mod tests {
 
                 handle_project_command(
                     ProjectCommand::Update {
-                        id: 1,
+                        id: ProjectId(1),
                         name: None,
                         description: Some("New".into()),
                         clear_description: false,
@@ -370,7 +377,7 @@ mod tests {
                     &mut vec![],
                 )?;
 
-                let project = repository.get(1)?.expect("Project should exist");
+                let project = repository.get(ProjectId(1))?.expect("Project should exist");
 
                 assert_eq!(project.description.as_deref(), Some("New"));
 
@@ -386,7 +393,7 @@ mod tests {
 
                 handle_project_command(
                     ProjectCommand::Update {
-                        id: 1,
+                        id: ProjectId(1),
                         name: None,
                         description: None,
                         clear_description: true,
@@ -395,7 +402,7 @@ mod tests {
                     &mut vec![],
                 )?;
 
-                let project = repository.get(1)?.expect("Project should exist");
+                let project = repository.get(ProjectId(1))?.expect("Project should exist");
 
                 assert_eq!(project.description, None);
 
@@ -409,7 +416,7 @@ mod tests {
 
                 let result = handle_project_command(
                     ProjectCommand::Update {
-                        id: 999,
+                        id: ProjectId(999),
                         name: Some("Updated".into()),
                         description: None,
                         clear_description: false,
@@ -420,7 +427,9 @@ mod tests {
 
                 assert!(matches!(
                     result.unwrap_err().downcast_ref::<ProjectCommandError>(),
-                    Some(ProjectCommandError::ProjectNotFound { project_id: 999 })
+                    Some(ProjectCommandError::ProjectNotFound {
+                        project_id: ProjectId(999)
+                    })
                 ));
 
                 Ok(())
@@ -437,9 +446,13 @@ mod tests {
 
                 repository.insert("Project", None)?;
 
-                handle_project_command(ProjectCommand::Delete { id: 1 }, &repository, &mut vec![])?;
+                handle_project_command(
+                    ProjectCommand::Delete { id: ProjectId(1) },
+                    &repository,
+                    &mut vec![],
+                )?;
 
-                assert!(repository.get(1)?.is_none());
+                assert!(repository.get(ProjectId(1))?.is_none());
 
                 Ok(())
             }
@@ -450,14 +463,16 @@ mod tests {
                 let repository = ProjectRepository::new(context.connection());
 
                 let result = handle_project_command(
-                    ProjectCommand::Delete { id: 999 },
+                    ProjectCommand::Delete { id: ProjectId(999) },
                     &repository,
                     &mut vec![],
                 );
 
                 assert!(matches!(
                     result.unwrap_err().downcast_ref::<ProjectCommandError>(),
-                    Some(ProjectCommandError::ProjectNotFound { project_id: 999 })
+                    Some(ProjectCommandError::ProjectNotFound {
+                        project_id: ProjectId(999)
+                    })
                 ));
 
                 Ok(())
@@ -519,7 +534,7 @@ mod tests {
 
                 assert_eq!(
                     line,
-                    r#"Project { id: 1, name: "Project A", description: None }"#
+                    r#"Project { id: ProjectId(1), name: "Project A", description: None }"#
                 );
 
                 Ok(())

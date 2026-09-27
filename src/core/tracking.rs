@@ -3,6 +3,7 @@ use crate::db::event_repository::EventRepository;
 use crate::db::manual_session_repository::ManualSessionRepository;
 use crate::db::project_repository::ProjectRepository;
 use crate::model::event::{Event, EventType};
+use crate::model::ids::ProjectId;
 use crate::model::project::Project;
 use crate::model::session::Session;
 use rusqlite::Connection;
@@ -28,7 +29,7 @@ impl<'a> Tracking<'a> {
     ///
     /// Returns an error if reading existing started events or inserting
     /// the generated stop/start events into the database fails.
-    pub fn start(&self, project_id: i32) -> rusqlite::Result<()> {
+    pub fn start(&self, project_id: ProjectId) -> rusqlite::Result<()> {
         let event_repository = EventRepository::new(self.connection);
         let timestamp = UnixTimestamp::now();
 
@@ -46,7 +47,7 @@ impl<'a> Tracking<'a> {
     /// # Errors
     ///
     /// Returns an error if inserting the stop event into the database fails.
-    pub fn stop(&self, project_id: i32) -> Result<(), TrackingError> {
+    pub fn stop(&self, project_id: ProjectId) -> Result<(), TrackingError> {
         let event_repository = EventRepository::new(self.connection);
         let timestamp = UnixTimestamp::now();
 
@@ -66,7 +67,7 @@ impl<'a> Tracking<'a> {
     /// # Errors
     ///
     /// Returns an error if starting or stopping events fails.
-    pub fn toggle(&self, project_id: i32) -> Result<(), TrackingError> {
+    pub fn toggle(&self, project_id: ProjectId) -> Result<(), TrackingError> {
         let event_repository = EventRepository::new(self.connection);
 
         if let Some(started_event) = event_repository.get_started_event()?
@@ -89,7 +90,7 @@ impl<'a> Tracking<'a> {
     /// Returns an error if `SQLite` fails to execute the queries.
     pub fn set(
         &self,
-        project_id: i32,
+        project_id: ProjectId,
         date: Date,
         total_seconds: i64,
     ) -> Result<(), TrackingError> {
@@ -105,7 +106,7 @@ impl<'a> Tracking<'a> {
     /// # Errors
     ///
     /// Returns an error if deleting or creating events in the database fails.
-    pub fn reset(&self, project_id: i32, date: Date) -> Result<(), TrackingError> {
+    pub fn reset(&self, project_id: ProjectId, date: Date) -> Result<(), TrackingError> {
         self.overwrite_day(project_id, date, None)?;
 
         Ok(())
@@ -122,7 +123,7 @@ impl<'a> Tracking<'a> {
     /// * Failure to upsert the adjusted session in the `ManualSessionRepository`.
     pub fn adjust_by_fifteen_minutes(
         &self,
-        project_id: i32,
+        project_id: ProjectId,
         date: Date,
         operation: TimeAdjustmentOperation,
     ) -> Result<(), TrackingError> {
@@ -148,7 +149,7 @@ impl<'a> Tracking<'a> {
 
     fn overwrite_day(
         &self,
-        project_id: i32,
+        project_id: ProjectId,
         date: Date,
         total_seconds: Option<i64>,
     ) -> Result<(), TrackingError> {
@@ -182,10 +183,10 @@ impl<'a> Tracking<'a> {
     pub fn list_all_sessions(
         &self,
         date: Date,
-        project_id: Option<i32>,
+        project_id: Option<ProjectId>,
     ) -> rusqlite::Result<Vec<Session>> {
         struct PrimitiveSession {
-            project_id: i32,
+            project_id: ProjectId,
             total_seconds: i64,
             is_started: bool,
         }
@@ -207,7 +208,7 @@ impl<'a> Tracking<'a> {
             );
         })?;
 
-        let mut project_to_events: HashMap<i32, Vec<Event>> = HashMap::new();
+        let mut project_to_events: HashMap<ProjectId, Vec<Event>> = HashMap::new();
 
         event_repository.for_each(date, project_id, |event| {
             project_to_events
@@ -253,11 +254,11 @@ impl<'a> Tracking<'a> {
             }
         }
 
-        let project_ids: Vec<i32> = project_to_primitive_sessions.keys().copied().collect();
+        let project_ids: Vec<ProjectId> = project_to_primitive_sessions.keys().copied().collect();
 
         let projects = project_repository.find_by_ids(&project_ids)?;
 
-        let mut project_id_to_project: HashMap<i32, Project> =
+        let mut project_id_to_project: HashMap<ProjectId, Project> =
             projects.into_iter().map(|p| (p.id, p)).collect();
 
         let mut sessions = Vec::new();
@@ -292,7 +293,7 @@ pub enum TrackingError {
     Sqlite(#[from] rusqlite::Error),
 
     #[error("no active start event for project {project_id}")]
-    NoActiveStartEvent { project_id: i32 },
+    NoActiveStartEvent { project_id: ProjectId },
 }
 
 #[cfg(test)]
@@ -327,19 +328,19 @@ mod tests {
 
             let tracking = Tracking::new(context.connection());
 
-            tracking.start(1)?;
-            tracking.stop(1)?;
+            tracking.start(ProjectId(1))?;
+            tracking.stop(ProjectId(1))?;
 
             let events = context.collect_events()?;
 
             assert_eq!(events.len(), 2);
 
             let start_event = &events[0];
-            assert_eq!(start_event.project_id, 1);
+            assert_eq!(start_event.project_id, ProjectId(1));
             assert_eq!(start_event.event_type, Start);
 
             let stop_event = &events[1];
-            assert_eq!(stop_event.project_id, 1);
+            assert_eq!(stop_event.project_id, ProjectId(1));
             assert_eq!(stop_event.event_type, Stop);
 
             Ok(())
@@ -351,20 +352,20 @@ mod tests {
             let context = initialize_context()?;
             let tracking = Tracking::new(context.connection());
 
-            tracking.start(1)?;
-            tracking.start(2)?;
+            tracking.start(ProjectId(1))?;
+            tracking.start(ProjectId(2))?;
 
             let events = context.collect_events()?;
 
             assert_eq!(events.len(), 3);
 
-            assert_eq!(events[0].project_id, 1);
+            assert_eq!(events[0].project_id, ProjectId(1));
             assert!(matches!(events[0].event_type, Start));
 
-            assert_eq!(events[1].project_id, 1);
+            assert_eq!(events[1].project_id, ProjectId(1));
             assert!(matches!(events[1].event_type, Stop));
 
-            assert_eq!(events[2].project_id, 2);
+            assert_eq!(events[2].project_id, ProjectId(2));
             assert!(matches!(events[2].event_type, Start));
 
             Ok(())
@@ -374,11 +375,11 @@ mod tests {
         fn stop_without_start_will_fail() -> Result<(), TrackingError> {
             let context = initialize_context()?;
             let tracking = Tracking::new(context.connection());
-            let result = tracking.stop(1);
+            let result = tracking.stop(ProjectId(1));
 
             assert!(matches!(
                 result,
-                Err(TrackingError::NoActiveStartEvent { project_id }) if project_id == 1
+                Err(TrackingError::NoActiveStartEvent { project_id }) if project_id == ProjectId(1)
             ));
 
             Ok(())
@@ -393,26 +394,26 @@ mod tests {
             let context = initialize_context()?;
             let tracking = Tracking::new(context.connection());
 
-            tracking.toggle(1)?;
+            tracking.toggle(ProjectId(1))?;
 
             let events = context.collect_events()?;
             assert_eq!(events.len(), 1);
 
             let event = events.first().unwrap();
-            assert_eq!(event.project_id, 1);
+            assert_eq!(event.project_id, ProjectId(1));
             assert_eq!(event.event_type, Start);
 
-            tracking.toggle(1)?;
+            tracking.toggle(ProjectId(1))?;
 
             let events = context.collect_events()?;
             assert_eq!(events.len(), 2);
 
             let event = events.first().unwrap();
-            assert_eq!(event.project_id, 1);
+            assert_eq!(event.project_id, ProjectId(1));
             assert_eq!(event.event_type, Start);
 
             let event = events.get(1).unwrap();
-            assert_eq!(event.project_id, 1);
+            assert_eq!(event.project_id, ProjectId(1));
             assert_eq!(event.event_type, Stop);
 
             Ok(())
@@ -423,30 +424,30 @@ mod tests {
             let context = initialize_context()?;
             let tracking = Tracking::new(context.connection());
 
-            tracking.toggle(1)?;
+            tracking.toggle(ProjectId(1))?;
 
             let events = context.collect_events()?;
             assert_eq!(events.len(), 1);
 
             let event = events.first().unwrap();
-            assert_eq!(event.project_id, 1);
+            assert_eq!(event.project_id, ProjectId(1));
             assert_eq!(event.event_type, Start);
 
-            tracking.toggle(2)?;
+            tracking.toggle(ProjectId(2))?;
 
             let events = context.collect_events()?;
             assert_eq!(events.len(), 3);
 
             let event = events.first().unwrap();
-            assert_eq!(event.project_id, 1);
+            assert_eq!(event.project_id, ProjectId(1));
             assert_eq!(event.event_type, Start);
 
             let event = events.get(1).unwrap();
-            assert_eq!(event.project_id, 1);
+            assert_eq!(event.project_id, ProjectId(1));
             assert_eq!(event.event_type, Stop);
 
             let event = events.get(2).unwrap();
-            assert_eq!(event.project_id, 2);
+            assert_eq!(event.project_id, ProjectId(2));
             assert_eq!(event.event_type, Start);
 
             Ok(())
@@ -472,13 +473,13 @@ mod tests {
             // -------------------------
             // Create start stop events for project 1 and 2
             // -------------------------
-            event_repository.insert(1, Start, timestamp)?;
+            event_repository.insert(ProjectId(1), Start, timestamp)?;
             timestamp += 10;
-            event_repository.insert(1, Stop, timestamp)?;
+            event_repository.insert(ProjectId(1), Stop, timestamp)?;
             timestamp += 1000;
-            event_repository.insert(2, Start, timestamp)?;
+            event_repository.insert(ProjectId(2), Start, timestamp)?;
             timestamp += 50;
-            event_repository.insert(2, Stop, timestamp)?;
+            event_repository.insert(ProjectId(2), Stop, timestamp)?;
 
             // -------------------------
             // Assert event-based sessions duration
@@ -487,17 +488,17 @@ mod tests {
             assert_eq!(sessions.len(), 2);
 
             let session = sessions.first().unwrap();
-            assert_eq!(session.project.id, 1);
+            assert_eq!(session.project.id, ProjectId(1));
             assert_eq!(session.total_seconds, 10);
 
             let session = sessions.get(1).unwrap();
-            assert_eq!(session.project.id, 2);
+            assert_eq!(session.project.id, ProjectId(2));
             assert_eq!(session.total_seconds, 50);
 
             // -------------------------
             // Manually set project 1 to 200 seconds
             // -------------------------
-            tracking.set(1, date, 200)?;
+            tracking.set(ProjectId(1), date, 200)?;
 
             // -------------------------
             // Verify that project 1 is 200 seconds, and project 2 is still event-based
@@ -506,11 +507,11 @@ mod tests {
             assert_eq!(sessions.len(), 2);
 
             let session = sessions.first().unwrap();
-            assert_eq!(session.project.id, 1);
+            assert_eq!(session.project.id, ProjectId(1));
             assert_eq!(session.total_seconds, 200);
 
             let session = sessions.get(1).unwrap();
-            assert_eq!(session.project.id, 2);
+            assert_eq!(session.project.id, ProjectId(2));
             assert_eq!(session.total_seconds, 50);
 
             Ok(())
@@ -534,12 +535,12 @@ mod tests {
                 .assume_utc()
                 .unix_timestamp();
 
-            event_repository.insert(1, Start, timestamp)?;
+            event_repository.insert(ProjectId(1), Start, timestamp)?;
             timestamp += 10;
-            event_repository.insert(1, Stop, timestamp)?;
+            event_repository.insert(ProjectId(1), Stop, timestamp)?;
             timestamp += 10;
             // Other projects' events should not be deleted
-            event_repository.insert(2, Start, timestamp)?;
+            event_repository.insert(ProjectId(2), Start, timestamp)?;
 
             let next_day =
                 Date::from_calendar_date(2026, time::Month::June, 3).expect("valid date");
@@ -549,9 +550,9 @@ mod tests {
                 .unix_timestamp();
 
             // Events on other days should not be deleted
-            event_repository.insert(1, Start, next_day_timestamp)?;
+            event_repository.insert(ProjectId(1), Start, next_day_timestamp)?;
 
-            manual_session_repository.upsert(1, date, 3600)?;
+            manual_session_repository.upsert(ProjectId(1), date, 3600)?;
 
             let events_before = context.collect_events()?;
             assert_eq!(events_before.len(), 4);
@@ -559,15 +560,15 @@ mod tests {
             let sessions_before = context.collect_sessions()?;
             assert_eq!(sessions_before.len(), 1);
 
-            tracking.reset(1, date)?;
+            tracking.reset(ProjectId(1), date)?;
 
             let events_after = context.collect_events()?;
             assert_eq!(events_after.len(), 2);
 
             let event_0 = &events_after[0];
-            assert_eq!(event_0.project_id, 2);
+            assert_eq!(event_0.project_id, ProjectId(2));
             let event_1 = &events_after[1];
-            assert_eq!(event_1.project_id, 1);
+            assert_eq!(event_1.project_id, ProjectId(1));
             assert_eq!(event_1.timestamp, next_day_timestamp);
 
             let sessions_after = context.collect_sessions()?;
@@ -588,42 +589,42 @@ mod tests {
             let tracking = Tracking::new(context.connection());
             let date = Date::from_calendar_date(2024, time::Month::April, 11)?;
 
-            tracking.set(1, date, 400)?;
-            tracking.set(2, date, 400)?;
+            tracking.set(ProjectId(1), date, 400)?;
+            tracking.set(ProjectId(2), date, 400)?;
 
             // Rounding up to nearest quarter (900 seconds)
-            tracking.adjust_by_fifteen_minutes(1, date, Increment)?;
+            tracking.adjust_by_fifteen_minutes(ProjectId(1), date, Increment)?;
             // Rounding down to nearest quarter (0 seconds)
-            tracking.adjust_by_fifteen_minutes(2, date, Decrement)?;
+            tracking.adjust_by_fifteen_minutes(ProjectId(2), date, Decrement)?;
 
             let sessions = tracking.list_all_sessions(date, None)?;
             let first = sessions.first().unwrap();
             let second = sessions.get(1).unwrap();
 
-            assert_eq!(first.project.id, 1);
+            assert_eq!(first.project.id, ProjectId(1));
             assert!(!first.is_started);
             assert_eq!(first.total_seconds, 900);
 
-            assert_eq!(second.project.id, 2);
+            assert_eq!(second.project.id, ProjectId(2));
             assert!(!second.is_started);
             assert_eq!(second.total_seconds, 0);
 
             // Rounding up to 1,800 seconds
-            tracking.adjust_by_fifteen_minutes(1, date, Increment)?;
+            tracking.adjust_by_fifteen_minutes(ProjectId(1), date, Increment)?;
             // Rounding up to 2,700 seconds
-            tracking.adjust_by_fifteen_minutes(1, date, Increment)?;
+            tracking.adjust_by_fifteen_minutes(ProjectId(1), date, Increment)?;
             // Rounding down to 1,800 seconds
-            tracking.adjust_by_fifteen_minutes(1, date, Decrement)?;
+            tracking.adjust_by_fifteen_minutes(ProjectId(1), date, Decrement)?;
 
             let sessions = tracking.list_all_sessions(date, None)?;
             let first = sessions.first().unwrap();
             let second = sessions.get(1).unwrap();
 
-            assert_eq!(first.project.id, 1);
+            assert_eq!(first.project.id, ProjectId(1));
             assert!(!first.is_started);
             assert_eq!(first.total_seconds, 1800);
 
-            assert_eq!(second.project.id, 2);
+            assert_eq!(second.project.id, ProjectId(2));
             assert!(!second.is_started);
             assert_eq!(second.total_seconds, 0);
 
@@ -636,16 +637,16 @@ mod tests {
             let tracking = Tracking::new(context.connection());
             let date = Date::from_calendar_date(2024, time::Month::April, 11)?;
 
-            tracking.set(1, date, 400)?;
+            tracking.set(ProjectId(1), date, 400)?;
             // Rounding down to nearest quarter (0 seconds)
-            tracking.adjust_by_fifteen_minutes(1, date, Decrement)?;
+            tracking.adjust_by_fifteen_minutes(ProjectId(1), date, Decrement)?;
             // Rounding down again stays at 0 seconds.
-            tracking.adjust_by_fifteen_minutes(1, date, Decrement)?;
+            tracking.adjust_by_fifteen_minutes(ProjectId(1), date, Decrement)?;
 
             let sessions = tracking.list_all_sessions(date, None)?;
             let session = sessions.first().unwrap();
 
-            assert_eq!(session.project.id, 1);
+            assert_eq!(session.project.id, ProjectId(1));
             assert!(!session.is_started);
             assert_eq!(session.total_seconds, 0);
 
@@ -659,38 +660,38 @@ mod tests {
             let date = OffsetDateTime::now_utc().date();
 
             // Manual session (project 1)
-            tracking.set(1, date, 400)?;
+            tracking.set(ProjectId(1), date, 400)?;
 
             // Ongoing session (project 2)
-            tracking.toggle(2)?;
+            tracking.toggle(ProjectId(2))?;
 
             // Adjusting a session does not modify the ongoing session
-            tracking.adjust_by_fifteen_minutes(1, date, Increment)?;
+            tracking.adjust_by_fifteen_minutes(ProjectId(1), date, Increment)?;
 
             let sessions = tracking.list_all_sessions(date, None)?;
             let first = sessions.first().unwrap();
             let second = sessions.get(1).unwrap();
 
-            assert_eq!(first.project.id, 1);
+            assert_eq!(first.project.id, ProjectId(1));
             assert!(!first.is_started);
             assert_eq!(first.total_seconds, 900);
 
-            assert_eq!(second.project.id, 2);
+            assert_eq!(second.project.id, ProjectId(2));
             assert!(second.is_started);
             assert_eq!(second.total_seconds, 0);
 
             // Adjusting an ongoing session stops it.
-            tracking.adjust_by_fifteen_minutes(2, date, Increment)?;
+            tracking.adjust_by_fifteen_minutes(ProjectId(2), date, Increment)?;
 
             let sessions = tracking.list_all_sessions(date, None)?;
             let first = sessions.first().unwrap();
             let second = sessions.get(1).unwrap();
 
-            assert_eq!(first.project.id, 1);
+            assert_eq!(first.project.id, ProjectId(1));
             assert!(!first.is_started);
             assert_eq!(first.total_seconds, 900);
 
-            assert_eq!(second.project.id, 2);
+            assert_eq!(second.project.id, ProjectId(2));
             assert!(!second.is_started);
             assert_eq!(second.total_seconds, 900);
 
@@ -722,31 +723,31 @@ mod tests {
             // -------------------------
             // Manual session (project 1)
             // -------------------------
-            manual_session_repository.upsert(1, date, 3600)?;
+            manual_session_repository.upsert(ProjectId(1), date, 3600)?;
 
             // -------------------------
             // Event session (project 2)
             // -------------------------
-            event_repository.insert(2, Start, timestamp)?;
+            event_repository.insert(ProjectId(2), Start, timestamp)?;
             timestamp += 10;
-            event_repository.insert(2, Stop, timestamp)?;
+            event_repository.insert(ProjectId(2), Stop, timestamp)?;
             timestamp += 10;
-            event_repository.insert(2, Start, timestamp)?;
+            event_repository.insert(ProjectId(2), Start, timestamp)?;
             timestamp += 10;
-            event_repository.insert(2, Stop, timestamp)?;
+            event_repository.insert(ProjectId(2), Stop, timestamp)?;
 
             // -------------------------
             // Combination of manual and event session (project 3)
             // -------------------------
-            tracking.set(3, date, 1000)?;
-            event_repository.insert(3, Start, timestamp)?;
+            tracking.set(ProjectId(3), date, 1000)?;
+            event_repository.insert(ProjectId(3), Start, timestamp)?;
             timestamp += 10;
-            event_repository.insert(3, Stop, timestamp)?;
+            event_repository.insert(ProjectId(3), Stop, timestamp)?;
 
             // -------------------------
             // Ongoing session (project 4): Start only
             // -------------------------
-            event_repository.insert(4, Start, today_timestamp - 100)?;
+            event_repository.insert(ProjectId(4), Start, today_timestamp - 100)?;
 
             // -------------------------
             // Execute
@@ -762,7 +763,7 @@ mod tests {
 
             // Project 1: manual session
             let session = sessions.first().unwrap();
-            assert_eq!(session.project.id, 1);
+            assert_eq!(session.project.id, ProjectId(1));
             assert_eq!(session.project.name, "A");
             assert!(session.project.description.is_none());
             assert_eq!(session.total_seconds, 3600);
@@ -770,7 +771,7 @@ mod tests {
 
             // Project 2: event session
             let session = sessions.get(1).unwrap();
-            assert_eq!(session.project.id, 2);
+            assert_eq!(session.project.id, ProjectId(2));
             assert_eq!(session.project.name, "B");
             assert_eq!(session.project.description, Some("A desc".to_string()));
             assert_eq!(session.total_seconds, 20);
@@ -778,7 +779,7 @@ mod tests {
 
             // Project 3: manual and event session
             let session = sessions.get(2).unwrap();
-            assert_eq!(session.project.id, 3);
+            assert_eq!(session.project.id, ProjectId(3));
             assert_eq!(session.project.name, "C");
             assert!(session.project.description.is_none());
             assert!(!session.is_started);
@@ -791,7 +792,7 @@ mod tests {
 
             // Project 4: ongoing session (Start only)
             let session = today_sessions.first().unwrap();
-            assert_eq!(session.project.id, 4);
+            assert_eq!(session.project.id, ProjectId(4));
             assert_eq!(session.project.name, "D");
             assert!(session.project.description.is_none());
             assert!(session.is_started);
@@ -818,8 +819,8 @@ mod tests {
             // -------------------------
             // Combination of manual session and ongoing event session (project 5)
             // -------------------------
-            tracking.set(5, today, 1000)?;
-            event_repository.insert(5, Start, today_timestamp - 100)?;
+            tracking.set(ProjectId(5), today, 1000)?;
+            event_repository.insert(ProjectId(5), Start, today_timestamp - 100)?;
 
             // -------------------------
             // Execute
@@ -838,7 +839,7 @@ mod tests {
 
             // Project 5: manual session + ongoing session
             let session = today_sessions.first().unwrap();
-            assert_eq!(session.project.id, 5);
+            assert_eq!(session.project.id, ProjectId(5));
             assert_eq!(session.project.name, "E");
             assert!(session.project.description.is_none());
             assert!(session.is_started);

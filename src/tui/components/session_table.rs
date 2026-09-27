@@ -598,6 +598,7 @@ mod tests {
     use crate::db::manual_session_repository::ManualSessionRepository;
     use crate::db::project_repository::ProjectRepository;
     use crate::model::event::EventType;
+    use crate::model::ids::ProjectId;
     use crossterm::event::KeyModifiers;
     use time::{Month, PrimitiveDateTime, Time};
 
@@ -625,21 +626,21 @@ mod tests {
             .unix_timestamp();
 
         event_repository
-            .insert(1, EventType::Start, timestamp)
+            .insert(ProjectId(1), EventType::Start, timestamp)
             .unwrap();
 
         // 1 hour 30 min 30 seconds
         timestamp += 5430;
 
         event_repository
-            .insert(1, EventType::Stop, timestamp)
+            .insert(ProjectId(1), EventType::Stop, timestamp)
             .unwrap();
 
         let manual_session_repository = ManualSessionRepository::new(context.connection());
 
         // 15 min = 900 sec
         manual_session_repository
-            .upsert(2, start_date, 900)
+            .upsert(ProjectId(2), start_date, 900)
             .unwrap();
 
         context
@@ -885,22 +886,34 @@ mod tests {
             // Go down by pressing 'j'
             let event = table.handle_key_event(key(KeyCode::Char('j'))).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
-            assert_eq!(table.get_selected_session().unwrap().project.id, 1);
+            assert_eq!(
+                table.get_selected_session().unwrap().project.id,
+                ProjectId(1)
+            );
 
             // Go up by pressing 'k'
             let event = table.handle_key_event(key(KeyCode::Char('k'))).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
-            assert_eq!(table.get_selected_session().unwrap().project.id, 2);
+            assert_eq!(
+                table.get_selected_session().unwrap().project.id,
+                ProjectId(2)
+            );
 
             // Go down by pressing Down arrow
             let event = table.handle_key_event(key(KeyCode::Down)).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
-            assert_eq!(table.get_selected_session().unwrap().project.id, 1);
+            assert_eq!(
+                table.get_selected_session().unwrap().project.id,
+                ProjectId(1)
+            );
 
             // Go up by pressing Up arrow
             let event = table.handle_key_event(key(KeyCode::Up)).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
-            assert_eq!(table.get_selected_session().unwrap().project.id, 2);
+            assert_eq!(
+                table.get_selected_session().unwrap().project.id,
+                ProjectId(2)
+            );
 
             // Go to previous date using 'h' key
             let event = table.handle_key_event(key(KeyCode::Char('h'))).unwrap();
@@ -995,8 +1008,12 @@ mod tests {
             let today = OffsetDateTime::now_utc().date();
             let manual_session_repository = ManualSessionRepository::new(context.connection());
 
-            manual_session_repository.upsert(2, today, 500).unwrap();
-            manual_session_repository.upsert(1, today, 500).unwrap();
+            manual_session_repository
+                .upsert(ProjectId(2), today, 500)
+                .unwrap();
+            manual_session_repository
+                .upsert(ProjectId(1), today, 500)
+                .unwrap();
 
             let mut table = SessionTable::new(
                 context.connection(),
@@ -1013,9 +1030,9 @@ mod tests {
             let first = table.sessions.first().unwrap();
             let second = table.sessions.get(1).unwrap();
 
-            assert_eq!(first.project.id, 2);
+            assert_eq!(first.project.id, ProjectId(2));
             assert!(!first.is_started);
-            assert_eq!(second.project.id, 1);
+            assert_eq!(second.project.id, ProjectId(1));
             assert!(!second.is_started);
 
             // Start the selected session - by default the first row - which is project 2
@@ -1027,10 +1044,10 @@ mod tests {
             let first = table.sessions.first().unwrap();
             let second = table.sessions.get(1).unwrap();
 
-            assert_eq!(first.project.id, 2);
+            assert_eq!(first.project.id, ProjectId(2));
             assert_eq!(first.total_seconds, 500);
             assert!(first.is_started);
-            assert_eq!(second.project.id, 1);
+            assert_eq!(second.project.id, ProjectId(1));
             assert_eq!(second.total_seconds, 500);
             assert!(!second.is_started);
 
@@ -1056,9 +1073,9 @@ mod tests {
             let first = table.sessions.first().unwrap();
             let second = table.sessions.get(1).unwrap();
 
-            assert_eq!(first.project.id, 2);
+            assert_eq!(first.project.id, ProjectId(2));
             assert!(!first.is_started);
-            assert_eq!(second.project.id, 1);
+            assert_eq!(second.project.id, ProjectId(1));
             assert!(second.is_started);
 
             // Advance time by two seconds
@@ -1075,9 +1092,9 @@ mod tests {
             let first = table.sessions.first().unwrap();
             let second = table.sessions.get(1).unwrap();
 
-            assert_eq!(first.project.id, 2);
+            assert_eq!(first.project.id, ProjectId(2));
             assert!(!first.is_started);
-            assert_eq!(second.project.id, 1);
+            assert_eq!(second.project.id, ProjectId(1));
             assert!(!second.is_started);
         }
 
@@ -1104,10 +1121,12 @@ mod tests {
             assert_eq!(event, KeyEventResult::Consumed);
 
             let tracking = Tracking::new(context.connection());
-            let sessions = tracking.list_all_sessions(date, Some(2)).unwrap();
+            let sessions = tracking
+                .list_all_sessions(date, Some(ProjectId(2)))
+                .unwrap();
             let session = sessions.first().unwrap();
 
-            assert_eq!(session.project.id, 2);
+            assert_eq!(session.project.id, ProjectId(2));
             assert!(!session.is_started);
             assert_eq!(session.total_seconds, 1800);
 
@@ -1119,10 +1138,12 @@ mod tests {
             assert_eq!(event, KeyEventResult::Consumed);
 
             let tracking = Tracking::new(context.connection());
-            let sessions = tracking.list_all_sessions(date, Some(2)).unwrap();
+            let sessions = tracking
+                .list_all_sessions(date, Some(ProjectId(2)))
+                .unwrap();
             let session = sessions.first().unwrap();
 
-            assert_eq!(session.project.id, 2);
+            assert_eq!(session.project.id, ProjectId(2));
             assert!(!session.is_started);
             assert_eq!(session.total_seconds, 900);
         }

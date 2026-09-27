@@ -1,4 +1,5 @@
 use crate::db::database::Repository;
+use crate::model::ids::ProjectId;
 use crate::model::manual_session::ManualSession;
 use rusqlite::{Connection, Result, named_params};
 use time::Date;
@@ -20,7 +21,7 @@ impl<'a> ManualSessionRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the insert statement, for
     /// example, because the database connection is invalid, the `manual_session` table
     /// does not exist, or the provided data violates a database constraint.
-    pub fn upsert(&self, project_id: i32, date: Date, total_seconds: i64) -> Result<()> {
+    pub fn upsert(&self, project_id: ProjectId, date: Date, total_seconds: i64) -> Result<()> {
         self.connection.execute(
             "INSERT INTO manual_session (project_id, date, total_seconds)
             VALUES (:project_id, :date, :total_seconds)
@@ -43,7 +44,7 @@ impl<'a> ManualSessionRepository<'a> {
     /// Returns an error if `SQLite` fails to execute the delete statement, for
     /// example, because the database connection is invalid or the `manual_session`
     /// table does not exist.
-    pub fn delete(&self, project_id: i32, date: Date) -> Result<bool> {
+    pub fn delete(&self, project_id: ProjectId, date: Date) -> Result<bool> {
         let deleted_count = self.connection.execute(
             "DELETE FROM manual_session
             WHERE project_id = :project_id AND date = :date",
@@ -59,7 +60,12 @@ impl<'a> ManualSessionRepository<'a> {
     ///
     /// Returns an error if preparing or executing the query fails, or if a returned
     /// row cannot be converted into a [`ManualSession`].
-    pub fn for_each<F>(&self, date: Date, project_id: Option<i32>, mut consumer: F) -> Result<()>
+    pub fn for_each<F>(
+        &self,
+        date: Date,
+        project_id: Option<ProjectId>,
+        mut consumer: F,
+    ) -> Result<()>
     where
         F: FnMut(ManualSession),
     {
@@ -141,9 +147,9 @@ mod tests {
         let date_1 = Date::from_calendar_date(2026, Month::May, 5).expect("Could not create date");
         let date_2 = Date::from_calendar_date(2026, Month::May, 6).expect("Could not create date");
 
-        repository.upsert(1, date_1, 5000)?;
-        repository.upsert(2, date_1, 500)?;
-        repository.upsert(1, date_2, 900)?;
+        repository.upsert(ProjectId(1), date_1, 5000)?;
+        repository.upsert(ProjectId(2), date_1, 500)?;
+        repository.upsert(ProjectId(1), date_2, 900)?;
 
         let mut sessions = context.collect_sessions()?;
         assert_eq!(sessions.len(), 3);
@@ -152,19 +158,19 @@ mod tests {
         let mut session_1 = &sessions[1];
         let mut session_2 = &sessions[2];
 
-        assert_eq!(session_0.project_id, 1);
+        assert_eq!(session_0.project_id, ProjectId(1));
         assert_eq!(session_0.total_seconds, 5000);
         assert_eq!(session_0.date.to_string(), "2026-05-05");
 
-        assert_eq!(session_1.project_id, 2);
+        assert_eq!(session_1.project_id, ProjectId(2));
         assert_eq!(session_1.total_seconds, 500);
         assert_eq!(session_1.date.to_string(), "2026-05-05");
 
-        assert_eq!(session_2.project_id, 1);
+        assert_eq!(session_2.project_id, ProjectId(1));
         assert_eq!(session_2.total_seconds, 900);
         assert_eq!(session_2.date.to_string(), "2026-05-06");
 
-        repository.upsert(1, date_1, 6000)?;
+        repository.upsert(ProjectId(1), date_1, 6000)?;
 
         sessions = context.collect_sessions()?;
         assert_eq!(sessions.len(), 3);
@@ -173,15 +179,15 @@ mod tests {
         session_1 = &sessions[1];
         session_2 = &sessions[2];
 
-        assert_eq!(session_0.project_id, 1);
+        assert_eq!(session_0.project_id, ProjectId(1));
         assert_eq!(session_0.total_seconds, 6000);
         assert_eq!(session_0.date.to_string(), "2026-05-05");
 
-        assert_eq!(session_1.project_id, 2);
+        assert_eq!(session_1.project_id, ProjectId(2));
         assert_eq!(session_1.total_seconds, 500);
         assert_eq!(session_1.date.to_string(), "2026-05-05");
 
-        assert_eq!(session_2.project_id, 1);
+        assert_eq!(session_2.project_id, ProjectId(1));
         assert_eq!(session_2.total_seconds, 900);
         assert_eq!(session_2.date.to_string(), "2026-05-06");
 
@@ -194,9 +200,9 @@ mod tests {
         let repository = ManualSessionRepository::new(context.connection());
         let date = Date::from_calendar_date(2026, Month::May, 5).expect("Could not create date");
 
-        repository.upsert(1, date, 1000)?;
+        repository.upsert(ProjectId(1), date, 1000)?;
 
-        let deleted = repository.delete(1, date)?;
+        let deleted = repository.delete(ProjectId(1), date)?;
         assert!(deleted);
 
         let sessions = context.collect_sessions()?;
@@ -211,7 +217,7 @@ mod tests {
         let repository = ManualSessionRepository::new(context.connection());
         let date = Date::from_calendar_date(2026, Month::May, 5).expect("Could not create date");
 
-        let deleted = repository.delete(1, date)?;
+        let deleted = repository.delete(ProjectId(1), date)?;
         assert!(!deleted);
 
         Ok(())
@@ -224,16 +230,16 @@ mod tests {
 
         let date = Date::from_calendar_date(2026, Month::May, 5).expect("Could not create date");
 
-        repository.upsert(1, date, 1000)?;
-        repository.upsert(2, date, 2000)?;
+        repository.upsert(ProjectId(1), date, 1000)?;
+        repository.upsert(ProjectId(2), date, 2000)?;
 
-        repository.delete(1, date)?;
+        repository.delete(ProjectId(1), date)?;
 
         let sessions = context.collect_sessions()?;
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].project_id, 2);
+        assert_eq!(sessions[0].project_id, ProjectId(2));
 
-        repository.upsert(1, date, 3000)?;
+        repository.upsert(ProjectId(1), date, 3000)?;
 
         let sessions = context.collect_sessions()?;
         assert_eq!(sessions.len(), 2);

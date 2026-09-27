@@ -1,6 +1,7 @@
 use crate::core::config::{Config, ConfigMetadata};
 use crate::core::issue_tracker::IssueTracker;
 use crate::db::project_repository::ProjectRepository;
+use crate::model::ids::ProjectId;
 use crate::model::project::Project;
 use crate::tui::components::alert_dialog::{AlertDialog, AlertDialogEvent};
 use crate::tui::components::issue_finder_form::{IssueFinderEvent, IssueFinderForm};
@@ -300,7 +301,7 @@ impl<'a> ProjectTable<'a> {
 
     fn update_project(
         &mut self,
-        id: i32,
+        id: ProjectId,
         name: &str,
         description: Option<&str>,
     ) -> anyhow::Result<()> {
@@ -711,25 +712,25 @@ mod tests {
             let event = table.handle_key_event(key(KeyCode::Char('j'))).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
             let selected_project = table.get_selected_project().unwrap();
-            assert_eq!(selected_project.id, 3);
+            assert_eq!(selected_project.id, ProjectId(3));
 
             // Navigate up with 'k'
             let event = table.handle_key_event(key(KeyCode::Char('k'))).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
             let selected_project = table.get_selected_project().unwrap();
-            assert_eq!(selected_project.id, 2);
+            assert_eq!(selected_project.id, ProjectId(2));
 
             // Navigate down with arrow down
             let event = table.handle_key_event(key(KeyCode::Down)).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
             let selected_project = table.get_selected_project().unwrap();
-            assert_eq!(selected_project.id, 3);
+            assert_eq!(selected_project.id, ProjectId(3));
 
             // Navigate up with arrow up
             let event = table.handle_key_event(key(KeyCode::Up)).unwrap();
             assert_eq!(event, KeyEventResult::Consumed);
             let selected_project = table.get_selected_project().unwrap();
-            assert_eq!(selected_project.id, 2);
+            assert_eq!(selected_project.id, ProjectId(2));
         }
 
         #[test]
@@ -747,8 +748,8 @@ mod tests {
             table.handle_key_event(key(KeyCode::Char('D'))).unwrap();
 
             assert_eq!(table.projects.len(), 2);
-            assert_eq!(table.projects.first().unwrap().id, 3);
-            assert_eq!(table.projects.get(1).unwrap().id, 1);
+            assert_eq!(table.projects.first().unwrap().id, ProjectId(3));
+            assert_eq!(table.projects.get(1).unwrap().id, ProjectId(1));
         }
 
         #[test]

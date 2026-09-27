@@ -1,10 +1,11 @@
+use crate::model::ids::{EventId, ProjectId};
 use rusqlite::ToSql;
 use rusqlite::types::{FromSql, FromSqlResult, ToSqlOutput, ValueRef};
 
 #[derive(Debug)]
 pub struct Event {
-    pub id: i32,
-    pub project_id: i32,
+    pub id: EventId,
+    pub project_id: ProjectId,
     pub event_type: EventType,
     pub timestamp: i64,
 }

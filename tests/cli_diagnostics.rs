@@ -125,7 +125,7 @@ fn successful_commands_preserve_stdout_and_leave_stderr_empty() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "Project { id: 1, name: \"Example\", description: None }\n"
+        "Project { id: ProjectId(1), name: \"Example\", description: None }\n"
     );
     assert!(output.stderr.is_empty());
     let output = cli.run(&["set", "-p", "1", "-d", "2026-09-01", "--duration", "1:30"]);
