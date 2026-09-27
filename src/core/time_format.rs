@@ -1,5 +1,6 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Serialize, Deserialize, Copy, Clone, ValueEnum, Debug, Eq, PartialEq)]
@@ -22,43 +23,32 @@ impl TimeFormat {
     }
 
     #[must_use]
-    pub fn round(self, seconds: i64) -> i64 {
-        match self {
-            TimeFormat::HoursMinutesSeconds | TimeFormat::Seconds => seconds,
-            TimeFormat::HoursMinutes => {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-                let mut minutes = (seconds as f64 / 60.0).round() as i64;
-
-                // if non-zero but rounded below 1 minute, round up to 1 minute
-                if seconds > 0 && minutes < 1 {
-                    minutes = 1;
-                }
-
-                minutes * 60
+    pub fn round(self, duration: Duration) -> Duration {
+        let seconds = duration.as_secs();
+        let interval = match self {
+            TimeFormat::HoursMinutesSeconds | TimeFormat::Seconds => {
+                return Duration::from_secs(seconds);
             }
-            TimeFormat::DecimalHours => {
-                #[allow(clippy::cast_precision_loss)]
-                let hours = seconds as f64 / 3600.0;
-
-                // round to nearest quarter-hour
-                let mut rounded_hours = (hours * 4.0).round() / 4.0;
-
-                // if non-zero but below 0.25, round up to 0.25
-                if hours > 0.0 && rounded_hours < 0.25 {
-                    rounded_hours = 0.25;
-                }
-
-                #[allow(clippy::cast_possible_truncation)]
-                let result = (rounded_hours * 3600.0) as i64;
-
-                result
-            }
-        }
+            TimeFormat::HoursMinutes => 60,
+            TimeFormat::DecimalHours => 900,
+        };
+        let remainder = seconds % interval;
+        let base = seconds - remainder;
+        let rounded = if remainder >= interval / 2 {
+            base.saturating_add(interval)
+        } else {
+            base
+        };
+        Duration::from_secs(if seconds > 0 {
+            rounded.max(interval)
+        } else {
+            0
+        })
     }
 
     #[must_use]
-    pub fn format(self, seconds: i64) -> String {
-        let seconds = self.round(seconds);
+    pub fn format(self, duration: Duration) -> String {
+        let seconds = self.round(duration).as_secs();
 
         match self {
             TimeFormat::HoursMinutesSeconds => {
@@ -78,26 +68,25 @@ impl TimeFormat {
         }
     }
 
-    /// Takes a user's input in the form of a string and attempts to convert it to a number of seconds.
+    /// Takes a user's input in the form of a string and attempts to convert it to a duration with whole-second precision.
     ///
     /// # Errors
     /// Returns an error if the supplied input is invalid
-    pub fn parse(self, text: &str) -> Result<i64, TimeParseError> {
+    pub fn parse(self, text: &str) -> Result<Duration, TimeParseError> {
         if text.is_empty() {
             return Err(TimeParseError::Empty);
         }
 
         match self {
             TimeFormat::Seconds => {
-                let seconds: i64 = text
+                if text.starts_with('-') {
+                    return Err(TimeParseError::NegativeSeconds);
+                }
+                let seconds: u64 = text
                     .parse()
                     .map_err(|source| TimeParseError::Seconds { source })?;
 
-                if seconds < 0 {
-                    return Err(TimeParseError::NegativeSeconds);
-                }
-
-                Ok(seconds)
+                Ok(Duration::from_secs(seconds))
             }
 
             TimeFormat::HoursMinutesSeconds => {
@@ -113,7 +102,7 @@ impl TimeFormat {
                     return Err(TimeParseError::MinutesSecondsRange);
                 }
 
-                Ok(h * 3600 + m * 60 + s)
+                helpers::duration_from_hms(h, m, s)
             }
 
             TimeFormat::HoursMinutes => {
@@ -129,7 +118,7 @@ impl TimeFormat {
                     return Err(TimeParseError::MinutesRange);
                 }
 
-                Ok(h * 3600 + m * 60)
+                helpers::duration_from_hms(h, m, 0)
             }
 
             TimeFormat::DecimalHours => {
@@ -162,10 +151,8 @@ impl TimeFormat {
                     return Err(TimeParseError::NegativeValue);
                 }
 
-                #[allow(clippy::cast_possible_truncation)]
-                let seconds = (value * 3600.0).round() as i64;
-
-                Ok(seconds)
+                Duration::try_from_secs_f64((value * 3600.0).round())
+                    .map_err(|_| TimeParseError::OutOfRange)
             }
         }
     }
@@ -173,6 +160,8 @@ impl TimeFormat {
 
 #[derive(Debug, Error)]
 pub enum TimeParseError {
+    #[error("Duration is not finite or is too large")]
+    OutOfRange,
     #[error("Value cannot be empty")]
     Empty,
     #[error("Expected whole seconds (e.g. 120)")]
@@ -209,8 +198,21 @@ pub enum TimeParseError {
 
 mod helpers {
     use super::TimeParseError;
+    use std::time::Duration;
+
+    pub(super) fn duration_from_hms(h: u64, m: u64, s: u64) -> Result<Duration, TimeParseError> {
+        h.checked_mul(3600)
+            .and_then(|hours| {
+                m.checked_mul(60)
+                    .and_then(|minutes| hours.checked_add(minutes))
+            })
+            .and_then(|seconds| seconds.checked_add(s))
+            .map(Duration::from_secs)
+            .ok_or(TimeParseError::OutOfRange)
+    }
+
     #[must_use]
-    pub(super) fn seconds_to_hms(seconds: i64) -> (i64, i64, i64) {
+    pub(super) fn seconds_to_hms(seconds: u64) -> (u64, u64, u64) {
         let hours = seconds / 3600;
         let minutes = (seconds % 3600) / 60;
         let seconds = seconds % 60;
@@ -218,8 +220,11 @@ mod helpers {
         (hours, minutes, seconds)
     }
 
-    pub(super) fn parse_hms(parts: &[&str]) -> Result<(i64, i64, i64), super::TimeParseError> {
-        let h: i64 =
+    pub(super) fn parse_hms(parts: &[&str]) -> Result<(u64, u64, u64), TimeParseError> {
+        if parts.iter().any(|part| part.starts_with('-')) {
+            return Err(TimeParseError::NegativeValue);
+        }
+        let h: u64 =
             parts
                 .first()
                 .unwrap_or(&"0")
@@ -229,7 +234,7 @@ mod helpers {
                     source,
                 })?;
 
-        let m: i64 =
+        let m: u64 =
             parts
                 .get(1)
                 .unwrap_or(&"0")
@@ -239,7 +244,7 @@ mod helpers {
                     source,
                 })?;
 
-        let s: i64 =
+        let s: u64 =
             parts
                 .get(2)
                 .unwrap_or(&"0")
@@ -277,12 +282,18 @@ mod tests {
 
         #[test]
         fn hms_no_change() {
-            assert_eq!(TimeFormat::HoursMinutesSeconds.round(3661), 3661);
+            assert_eq!(
+                TimeFormat::HoursMinutesSeconds.round(Duration::from_secs(3661)),
+                Duration::from_secs(3661)
+            );
         }
 
         #[test]
         fn seconds_no_change() {
-            assert_eq!(TimeFormat::Seconds.round(3661), 3661);
+            assert_eq!(
+                TimeFormat::Seconds.round(Duration::from_secs(3661)),
+                Duration::from_secs(3661)
+            );
         }
 
         mod hours_minutes {
@@ -291,18 +302,30 @@ mod tests {
             #[test]
             fn rounds_to_nearest_minute() {
                 // 89 sec → 1.48 min → 1 min
-                assert_eq!(TimeFormat::HoursMinutes.round(89), 60);
+                assert_eq!(
+                    TimeFormat::HoursMinutes.round(Duration::from_secs(89)),
+                    Duration::from_mins(1)
+                );
 
                 // 91 sec → 1.52 min → 2 min
-                assert_eq!(TimeFormat::HoursMinutes.round(91), 120);
+                assert_eq!(
+                    TimeFormat::HoursMinutes.round(Duration::from_secs(91)),
+                    Duration::from_mins(2)
+                );
             }
 
             #[test]
             fn rounds_small_non_zero_up() {
                 // Non-zero durations never become 00:00
-                assert_eq!(TimeFormat::HoursMinutes.round(1), 60);
+                assert_eq!(
+                    TimeFormat::HoursMinutes.round(Duration::from_secs(1)),
+                    Duration::from_mins(1)
+                );
 
-                assert_eq!(TimeFormat::HoursMinutes.round(29), 60);
+                assert_eq!(
+                    TimeFormat::HoursMinutes.round(Duration::from_secs(29)),
+                    Duration::from_mins(1)
+                );
             }
         }
 
@@ -312,26 +335,44 @@ mod tests {
             #[test]
             fn rounds_to_quarters() {
                 // Exact hour stays unchanged
-                assert_eq!(TimeFormat::DecimalHours.round(3600), 3600);
+                assert_eq!(
+                    TimeFormat::DecimalHours.round(Duration::from_hours(1)),
+                    Duration::from_hours(1)
+                );
 
                 // 4500 sec = 1.25h exact quarter
-                assert_eq!(TimeFormat::DecimalHours.round(4500), 4500);
+                assert_eq!(
+                    TimeFormat::DecimalHours.round(Duration::from_mins(75)),
+                    Duration::from_mins(75)
+                );
 
                 // rounding up
                 // 5000 sec ≈ 1.39h → 1.50h
-                assert_eq!(TimeFormat::DecimalHours.round(5000), 5400);
+                assert_eq!(
+                    TimeFormat::DecimalHours.round(Duration::from_secs(5000)),
+                    Duration::from_mins(90)
+                );
 
                 // rounding down
                 // 3900 sec = 1.083h → 1.00h
-                assert_eq!(TimeFormat::DecimalHours.round(3900), 3600);
+                assert_eq!(
+                    TimeFormat::DecimalHours.round(Duration::from_mins(65)),
+                    Duration::from_hours(1)
+                );
             }
 
             #[test]
             fn rounds_small_non_zero_up() {
                 // Never show 0.00 hours for non-zero input
-                assert_eq!(TimeFormat::DecimalHours.round(1), 900);
+                assert_eq!(
+                    TimeFormat::DecimalHours.round(Duration::from_secs(1)),
+                    Duration::from_mins(15)
+                );
 
-                assert_eq!(TimeFormat::DecimalHours.round(300), 900);
+                assert_eq!(
+                    TimeFormat::DecimalHours.round(Duration::from_mins(5)),
+                    Duration::from_mins(15)
+                );
             }
         }
     }
@@ -345,10 +386,16 @@ mod tests {
             #[test]
             fn formats() {
                 // 3661 sec → 3660 sec → 01:01
-                assert_eq!(TimeFormat::HoursMinutes.format(3661), "01:01");
+                assert_eq!(
+                    TimeFormat::HoursMinutes.format(Duration::from_secs(3661)),
+                    "01:01"
+                );
 
                 // Small non-zero → normalized to 1 minute
-                assert_eq!(TimeFormat::HoursMinutes.format(1), "00:01");
+                assert_eq!(
+                    TimeFormat::HoursMinutes.format(Duration::from_secs(1)),
+                    "00:01"
+                );
             }
         }
 
@@ -358,23 +405,38 @@ mod tests {
             #[test]
             fn formats() {
                 // 300 sec → 5 min → 0.083h → normalized to minimum 0.25h
-                assert_eq!(TimeFormat::DecimalHours.format(300), "00.25");
+                assert_eq!(
+                    TimeFormat::DecimalHours.format(Duration::from_mins(5)),
+                    "00.25"
+                );
 
                 // 5000 sec → 83 min 20 sec → 1.388h → rounded to nearest quarter (1.50h)
-                assert_eq!(TimeFormat::DecimalHours.format(5000), "01.50");
+                assert_eq!(
+                    TimeFormat::DecimalHours.format(Duration::from_secs(5000)),
+                    "01.50"
+                );
 
-                assert_eq!(TimeFormat::DecimalHours.format(3600), "01.00");
+                assert_eq!(
+                    TimeFormat::DecimalHours.format(Duration::from_hours(1)),
+                    "01.00"
+                );
             }
         }
 
         #[test]
         fn seconds_formats() {
-            assert_eq!(TimeFormat::Seconds.format(3661), "3661");
+            assert_eq!(
+                TimeFormat::Seconds.format(Duration::from_secs(3661)),
+                "3661"
+            );
         }
 
         #[test]
         fn hours_minutes_seconds_formats() {
-            assert_eq!(TimeFormat::HoursMinutesSeconds.format(3661), "01:01:01");
+            assert_eq!(
+                TimeFormat::HoursMinutesSeconds.format(Duration::from_secs(3661)),
+                "01:01:01"
+            );
         }
     }
 

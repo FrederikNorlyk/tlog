@@ -7,6 +7,7 @@ use ratatui::prelude::{Color, Widget};
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders};
 use ratatui_textarea::TextArea;
+use std::time::Duration;
 
 pub struct ManualSessionDialog<'a> {
     text_area: TextArea<'a>,
@@ -47,9 +48,7 @@ impl<'a> ManualSessionDialog<'a> {
             KeyCode::Esc => return ManualSessionEvent::Cancel,
             KeyCode::Enter => match self.get_value() {
                 Ok(value) => {
-                    return ManualSessionEvent::Save {
-                        total_seconds: value,
-                    };
+                    return ManualSessionEvent::Save { duration: value };
                 }
                 Err(error) => {
                     self.mark_form_invalid(error.to_string());
@@ -71,7 +70,7 @@ impl<'a> ManualSessionDialog<'a> {
         self.text_area.set_block(new_block);
     }
 
-    fn get_value(&self) -> Result<i64, TimeParseError> {
+    fn get_value(&self) -> Result<Duration, TimeParseError> {
         let text = self
             .text_area
             .lines()
@@ -95,7 +94,7 @@ impl Widget for &ManualSessionDialog<'_> {
 }
 
 pub enum ManualSessionEvent {
-    Save { total_seconds: i64 },
+    Save { duration: Duration },
     Cancel,
     Consumed,
 }
@@ -132,7 +131,7 @@ mod tests {
 
             assert!(matches!(
                 event,
-                ManualSessionEvent::Save { total_seconds: 120 }
+                ManualSessionEvent::Save { duration } if duration == Duration::from_mins(2)
             ));
         }
 
@@ -158,7 +157,7 @@ mod tests {
             }
             assert!(matches!(
                 dialog.handle_key_event(key(KeyCode::Enter)),
-                ManualSessionEvent::Save { total_seconds: 120 }
+                ManualSessionEvent::Save { duration } if duration == Duration::from_mins(2)
             ));
         }
 

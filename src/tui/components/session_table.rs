@@ -21,8 +21,9 @@ use ratatui::{
     widgets::{Block, Cell, Row, StatefulWidget, Table, TableState, Widget},
 };
 use rusqlite::Connection;
+use std::time::Duration;
 use time::macros::format_description;
-use time::{Date, Duration, OffsetDateTime};
+use time::{Date, OffsetDateTime};
 
 pub struct SessionTable<'a> {
     sessions: Vec<Session>,
@@ -79,30 +80,30 @@ impl<'a> SessionTable<'a> {
     pub fn tick(&mut self) {
         for session in &mut self.sessions {
             if session.is_started {
-                session.total_seconds += 1;
+                session.duration += Duration::from_secs(1);
             }
         }
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, is_active: bool) {
-        let mut total_seconds = 0;
+        let mut duration = Duration::ZERO;
         let mut max_name_length: u16 = 5;
 
         let mut rows: Vec<Row> = Vec::new();
 
         for session in &self.sessions {
             let description = session.project.description.as_deref().unwrap_or_default();
-            let duration = self.time_format.format(session.total_seconds);
+            let formatted_duration = self.time_format.format(session.duration);
             let name = session.project.name.as_str();
             let name_length = u16::try_from(name.len()).unwrap_or(u16::MAX);
 
             max_name_length = max_name_length.max(name_length);
-            total_seconds += session.total_seconds;
+            duration += session.duration;
 
             let mut row = Row::new(vec![
                 Cell::from(name).bold(),
                 Cell::from(description),
-                Cell::from(Text::from(duration).alignment(Alignment::Right)),
+                Cell::from(Text::from(formatted_duration).alignment(Alignment::Right)),
             ]);
 
             if session.is_started {
@@ -115,7 +116,7 @@ impl<'a> SessionTable<'a> {
         let footer = Row::new(vec![
             Cell::from("Total").bold(),
             Cell::from(""),
-            Cell::from(self.time_format.format(total_seconds)).underlined(),
+            Cell::from(self.time_format.format(duration)).underlined(),
         ]);
 
         let duration_width = match self.time_format {
@@ -193,8 +194,8 @@ impl<'a> SessionTable<'a> {
         let mut did_match = true;
 
         match key_event.code {
-            KeyCode::Char('h') | KeyCode::Left => self.shift_date(Duration::days(-1))?,
-            KeyCode::Char('l') | KeyCode::Right => self.shift_date(Duration::days(1))?,
+            KeyCode::Char('h') | KeyCode::Left => self.select_date(self.date.previous_day())?,
+            KeyCode::Char('l') | KeyCode::Right => self.select_date(self.date.next_day())?,
             KeyCode::Char('j') | KeyCode::Down => self.table_state.select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.table_state.select_previous(),
             KeyCode::Char('u') if ctrl_key_is_held => self.table_state.scroll_up_by(half_page),
@@ -285,8 +286,8 @@ impl<'a> SessionTable<'a> {
             return Err(anyhow::anyhow!("No project select"));
         };
         match dialog.handle_key_event(key_event) {
-            ManualSessionEvent::Save { total_seconds } => {
-                self.set_manual_session(total_seconds)?;
+            ManualSessionEvent::Save { duration } => {
+                self.set_manual_session(duration)?;
                 self.manual_session_dialog = None;
             }
             ManualSessionEvent::Cancel => {
@@ -359,12 +360,11 @@ impl<'a> SessionTable<'a> {
         Ok(())
     }
 
-    fn shift_date(&mut self, duration: Duration) -> anyhow::Result<()> {
-        // Overflowing current date is not an issue, so using expect here is fine.
-        self.date = self
-            .date
-            .checked_add(duration)
-            .expect("Could not shift date");
+    fn select_date(&mut self, date: Option<Date>) -> anyhow::Result<()> {
+        let Some(date) = date else {
+            return Ok(());
+        };
+        self.date = date;
 
         let tracking = Tracking::new(self.connection);
         self.sessions = tracking
@@ -454,7 +454,7 @@ impl<'a> SessionTable<'a> {
                     output.push(Self::escape_semicolon(description));
                 }
 
-                output.push(self.time_format.format(session.total_seconds));
+                output.push(self.time_format.format(session.duration));
 
                 output.join(";")
             }
@@ -466,7 +466,7 @@ impl<'a> SessionTable<'a> {
                     String::new()
                 }
             }
-            CopyContent::Time => self.time_format.format(session.total_seconds),
+            CopyContent::Time => self.time_format.format(session.duration),
             CopyContent::Project => {
                 let mut project = Self::escape_semicolon(&session.project.name);
                 if let Some(description) = &session.project.description {
@@ -496,7 +496,7 @@ impl<'a> SessionTable<'a> {
         self.sessions.get(selected_index)
     }
 
-    fn set_manual_session(&mut self, total_seconds: i64) -> anyhow::Result<()> {
+    fn set_manual_session(&mut self, duration: Duration) -> anyhow::Result<()> {
         let Some(session) = self.get_selected_session() else {
             return Err(anyhow::anyhow!("No selected session"));
         };
@@ -504,7 +504,7 @@ impl<'a> SessionTable<'a> {
         let tracking = Tracking::new(self.connection);
 
         tracking
-            .set(session.project.id, self.date, total_seconds)
+            .set(session.project.id, self.date, duration)
             .with_context(|| {
                 format!(
                     "Could not set time for project {} on {}",
@@ -621,16 +621,14 @@ mod tests {
         let start_date = get_test_date();
         let time = Time::from_hms(2, 30, 00).unwrap();
 
-        let mut timestamp = PrimitiveDateTime::new(start_date, time)
-            .assume_utc()
-            .unix_timestamp();
+        let mut timestamp = PrimitiveDateTime::new(start_date, time).assume_utc();
 
         event_repository
             .insert(ProjectId(1), EventType::Start, timestamp)
             .unwrap();
 
         // 1 hour 30 min 30 seconds
-        timestamp += 5430;
+        timestamp += Duration::from_secs(5430);
 
         event_repository
             .insert(ProjectId(1), EventType::Stop, timestamp)
@@ -640,7 +638,7 @@ mod tests {
 
         // 15 min = 900 sec
         manual_session_repository
-            .upsert(ProjectId(2), start_date, 900)
+            .upsert(ProjectId(2), start_date, Duration::from_mins(15))
             .unwrap();
 
         context
@@ -1009,10 +1007,10 @@ mod tests {
             let manual_session_repository = ManualSessionRepository::new(context.connection());
 
             manual_session_repository
-                .upsert(ProjectId(2), today, 500)
+                .upsert(ProjectId(2), today, Duration::from_secs(500))
                 .unwrap();
             manual_session_repository
-                .upsert(ProjectId(1), today, 500)
+                .upsert(ProjectId(1), today, Duration::from_secs(500))
                 .unwrap();
 
             let mut table = SessionTable::new(
@@ -1045,22 +1043,22 @@ mod tests {
             let second = table.sessions.get(1).unwrap();
 
             assert_eq!(first.project.id, ProjectId(2));
-            assert_eq!(first.total_seconds, 500);
+            assert_eq!(first.duration, Duration::from_secs(500));
             assert!(first.is_started);
             assert_eq!(second.project.id, ProjectId(1));
-            assert_eq!(second.total_seconds, 500);
+            assert_eq!(second.duration, Duration::from_secs(500));
             assert!(!second.is_started);
 
             // Advance time by one second
             table.tick();
-            thread::sleep(std::time::Duration::from_secs(1));
+            thread::sleep(Duration::from_secs(1));
 
             // Verify that the started project (2) has increased its number of seconds by 1
             let first = table.sessions.first().unwrap();
             let second = table.sessions.get(1).unwrap();
 
-            assert_eq!(first.total_seconds, 501);
-            assert_eq!(second.total_seconds, 500);
+            assert_eq!(first.duration, Duration::from_secs(501));
+            assert_eq!(second.duration, Duration::from_secs(500));
 
             // Select the second row
             table.handle_key_event(key(KeyCode::Down)).unwrap();
@@ -1081,7 +1079,7 @@ mod tests {
             // Advance time by two seconds
             table.tick();
             table.tick();
-            thread::sleep(std::time::Duration::from_secs(2));
+            thread::sleep(Duration::from_secs(2));
 
             // Stop the selected session (project 1)
             table.handle_key_event(key(KeyCode::Char(' '))).unwrap();
@@ -1128,7 +1126,7 @@ mod tests {
 
             assert_eq!(session.project.id, ProjectId(2));
             assert!(!session.is_started);
-            assert_eq!(session.total_seconds, 1800);
+            assert_eq!(session.duration, Duration::from_mins(30));
 
             // -------------------
             // Decrement by 15 min
@@ -1145,7 +1143,7 @@ mod tests {
 
             assert_eq!(session.project.id, ProjectId(2));
             assert!(!session.is_started);
-            assert_eq!(session.total_seconds, 900);
+            assert_eq!(session.duration, Duration::from_mins(15));
         }
 
         #[test]

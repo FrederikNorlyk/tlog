@@ -1,7 +1,8 @@
 use crate::model::project::Project;
+use std::time::Duration;
 
 pub struct Session {
     pub project: Project,
-    pub total_seconds: i64,
+    pub duration: Duration,
     pub is_started: bool,
 }

@@ -1,4 +1,3 @@
-use crate::core::unix_timestamp::UnixTimestamp;
 use crate::db::event_repository::EventRepository;
 use crate::db::manual_session_repository::ManualSessionRepository;
 use crate::db::project_repository::ProjectRepository;
@@ -8,8 +7,10 @@ use crate::model::project::Project;
 use crate::model::session::Session;
 use rusqlite::Connection;
 use std::collections::HashMap;
+use std::time::Duration;
 use thiserror::Error;
 use time::Date;
+use time::OffsetDateTime;
 
 pub struct Tracking<'a> {
     connection: &'a Connection,
@@ -31,7 +32,7 @@ impl<'a> Tracking<'a> {
     /// the generated stop/start events into the database fails.
     pub fn start(&self, project_id: ProjectId) -> rusqlite::Result<()> {
         let event_repository = EventRepository::new(self.connection);
-        let timestamp = UnixTimestamp::now();
+        let timestamp = OffsetDateTime::now_utc().truncate_to_second();
 
         if let Some(started_event) = event_repository.get_started_event()? {
             event_repository.insert(started_event.project_id, EventType::Stop, timestamp)?;
@@ -49,7 +50,7 @@ impl<'a> Tracking<'a> {
     /// Returns an error if inserting the stop event into the database fails.
     pub fn stop(&self, project_id: ProjectId) -> Result<(), TrackingError> {
         let event_repository = EventRepository::new(self.connection);
-        let timestamp = UnixTimestamp::now();
+        let timestamp = OffsetDateTime::now_utc().truncate_to_second();
 
         if !event_repository.has_started_event(project_id)? {
             return Err(TrackingError::NoActiveStartEvent { project_id });
@@ -92,9 +93,9 @@ impl<'a> Tracking<'a> {
         &self,
         project_id: ProjectId,
         date: Date,
-        total_seconds: i64,
+        duration: Duration,
     ) -> Result<(), TrackingError> {
-        self.overwrite_day(project_id, date, Some(total_seconds))?;
+        self.overwrite_day(project_id, date, Some(duration))?;
 
         Ok(())
     }
@@ -127,22 +128,22 @@ impl<'a> Tracking<'a> {
         date: Date,
         operation: TimeAdjustmentOperation,
     ) -> Result<(), TrackingError> {
-        const FIFTEEN_MINUTES_SECONDS: i64 = 15 * 60;
+        const FIFTEEN_MINUTES_SECONDS: u64 = 15 * 60;
 
         let sessions = self.list_all_sessions(date, Some(project_id))?;
-        let total_seconds = sessions.first().map_or(0, |s| s.total_seconds);
+        let total_seconds = sessions.first().map_or(0, |s| s.duration.as_secs());
 
         let rounded_seconds = match operation {
             TimeAdjustmentOperation::Increment => {
                 ((total_seconds / FIFTEEN_MINUTES_SECONDS) + 1) * FIFTEEN_MINUTES_SECONDS
             }
             TimeAdjustmentOperation::Decrement => {
-                ((total_seconds - 1) / FIFTEEN_MINUTES_SECONDS) * FIFTEEN_MINUTES_SECONDS
+                (total_seconds.saturating_sub(1) / FIFTEEN_MINUTES_SECONDS)
+                    * FIFTEEN_MINUTES_SECONDS
             }
-        }
-        .max(0);
+        };
 
-        self.overwrite_day(project_id, date, Some(rounded_seconds))?;
+        self.overwrite_day(project_id, date, Some(Duration::from_secs(rounded_seconds)))?;
 
         Ok(())
     }
@@ -151,17 +152,21 @@ impl<'a> Tracking<'a> {
         &self,
         project_id: ProjectId,
         date: Date,
-        total_seconds: Option<i64>,
+        duration: Option<Duration>,
     ) -> Result<(), TrackingError> {
         let event_repository = EventRepository::new(self.connection);
         let manual_session_repository = ManualSessionRepository::new(self.connection);
 
+        if let Some(duration) = duration {
+            i64::try_from(duration.as_secs())
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        }
         event_repository.delete_all_in(project_id, date)?;
 
         // TODO: If a start event exists on the project on a previous date we need to handle it
 
-        if let Some(seconds) = total_seconds {
-            manual_session_repository.upsert(project_id, date, seconds)?;
+        if let Some(duration) = duration {
+            manual_session_repository.upsert(project_id, date, duration)?;
         } else {
             manual_session_repository.delete(project_id, date)?;
         }
@@ -179,15 +184,16 @@ impl<'a> Tracking<'a> {
     ///
     /// # Errors
     ///
-    /// Returns a database error if any query or project lookup fails.
+    /// Returns an error if a query or project lookup fails, stored durations are invalid,
+    /// or an end time precedes its start time (for example, after a clock adjustment).
     pub fn list_all_sessions(
         &self,
         date: Date,
         project_id: Option<ProjectId>,
-    ) -> rusqlite::Result<Vec<Session>> {
+    ) -> Result<Vec<Session>, TrackingError> {
         struct PrimitiveSession {
             project_id: ProjectId,
-            total_seconds: i64,
+            duration: Duration,
             is_started: bool,
         }
 
@@ -202,7 +208,7 @@ impl<'a> Tracking<'a> {
                 manual_session.project_id,
                 PrimitiveSession {
                     project_id: manual_session.project_id,
-                    total_seconds: manual_session.total_seconds,
+                    duration: manual_session.duration,
                     is_started: false,
                 },
             );
@@ -221,13 +227,17 @@ impl<'a> Tracking<'a> {
 
         for (project_id, events) in &project_to_events {
             let mut i = 0;
-            let mut total_seconds = 0;
+            let mut duration = Duration::ZERO;
 
             while i + 1 < events.len() {
                 let start = &events[i];
                 let stop = &events[i + 1];
 
-                total_seconds += stop.timestamp - start.timestamp;
+                duration += Duration::try_from(stop.timestamp - start.timestamp).map_err(|_| {
+                    TrackingError::ReversedTimestamps {
+                        project_id: *project_id,
+                    }
+                })?;
 
                 i += 2;
             }
@@ -237,17 +247,22 @@ impl<'a> Tracking<'a> {
             if let Some(started_event) = &started_event
                 && started_event.project_id == *project_id
             {
-                total_seconds += UnixTimestamp::now() - started_event.timestamp;
+                duration += Duration::try_from(
+                    OffsetDateTime::now_utc().truncate_to_second() - started_event.timestamp,
+                )
+                .map_err(|_| TrackingError::ReversedTimestamps {
+                    project_id: *project_id,
+                })?;
                 is_started = true;
             }
 
             if let Some(session) = project_to_primitive_sessions.get_mut(project_id) {
-                session.total_seconds += total_seconds;
+                session.duration += duration;
                 session.is_started = is_started;
             } else {
                 let session = PrimitiveSession {
                     project_id: *project_id,
-                    total_seconds,
+                    duration,
                     is_started,
                 };
                 project_to_primitive_sessions.insert(*project_id, session);
@@ -270,7 +285,7 @@ impl<'a> Tracking<'a> {
 
             sessions.push(Session {
                 project,
-                total_seconds: primitive_session.total_seconds,
+                duration: primitive_session.duration,
                 is_started: primitive_session.is_started,
             });
         }
@@ -289,6 +304,8 @@ pub enum TimeAdjustmentOperation {
 
 #[derive(Debug, Error)]
 pub enum TrackingError {
+    #[error("end time precedes start time for project {project_id}")]
+    ReversedTimestamps { project_id: ProjectId },
     #[error("Could not update tracking records")]
     Sqlite(#[from] rusqlite::Error),
 
@@ -466,19 +483,17 @@ mod tests {
             let date = Date::from_calendar_date(2026, time::Month::June, 3)?;
             let time = Time::from_hms(10, 0, 0)?;
 
-            let mut timestamp = PrimitiveDateTime::new(date, time)
-                .assume_utc()
-                .unix_timestamp();
+            let mut timestamp = PrimitiveDateTime::new(date, time).assume_utc();
 
             // -------------------------
             // Create start stop events for project 1 and 2
             // -------------------------
             event_repository.insert(ProjectId(1), Start, timestamp)?;
-            timestamp += 10;
+            timestamp += Duration::from_secs(10);
             event_repository.insert(ProjectId(1), Stop, timestamp)?;
-            timestamp += 1000;
+            timestamp += Duration::from_secs(1000);
             event_repository.insert(ProjectId(2), Start, timestamp)?;
-            timestamp += 50;
+            timestamp += Duration::from_secs(50);
             event_repository.insert(ProjectId(2), Stop, timestamp)?;
 
             // -------------------------
@@ -489,16 +504,16 @@ mod tests {
 
             let session = sessions.first().unwrap();
             assert_eq!(session.project.id, ProjectId(1));
-            assert_eq!(session.total_seconds, 10);
+            assert_eq!(session.duration, Duration::from_secs(10));
 
             let session = sessions.get(1).unwrap();
             assert_eq!(session.project.id, ProjectId(2));
-            assert_eq!(session.total_seconds, 50);
+            assert_eq!(session.duration, Duration::from_secs(50));
 
             // -------------------------
             // Manually set project 1 to 200 seconds
             // -------------------------
-            tracking.set(ProjectId(1), date, 200)?;
+            tracking.set(ProjectId(1), date, Duration::from_secs(200))?;
 
             // -------------------------
             // Verify that project 1 is 200 seconds, and project 2 is still event-based
@@ -508,11 +523,11 @@ mod tests {
 
             let session = sessions.first().unwrap();
             assert_eq!(session.project.id, ProjectId(1));
-            assert_eq!(session.total_seconds, 200);
+            assert_eq!(session.duration, Duration::from_secs(200));
 
             let session = sessions.get(1).unwrap();
             assert_eq!(session.project.id, ProjectId(2));
-            assert_eq!(session.total_seconds, 50);
+            assert_eq!(session.duration, Duration::from_secs(50));
 
             Ok(())
         }
@@ -531,28 +546,24 @@ mod tests {
             let date = Date::from_calendar_date(2026, time::Month::June, 2).expect("valid date");
             let time = Time::from_hms(15, 56, 31)?;
 
-            let mut timestamp = PrimitiveDateTime::new(date, time)
-                .assume_utc()
-                .unix_timestamp();
+            let mut timestamp = PrimitiveDateTime::new(date, time).assume_utc();
 
             event_repository.insert(ProjectId(1), Start, timestamp)?;
-            timestamp += 10;
+            timestamp += Duration::from_secs(10);
             event_repository.insert(ProjectId(1), Stop, timestamp)?;
-            timestamp += 10;
+            timestamp += Duration::from_secs(10);
             // Other projects' events should not be deleted
             event_repository.insert(ProjectId(2), Start, timestamp)?;
 
             let next_day =
                 Date::from_calendar_date(2026, time::Month::June, 3).expect("valid date");
 
-            let next_day_timestamp = PrimitiveDateTime::new(next_day, time)
-                .assume_utc()
-                .unix_timestamp();
+            let next_day_timestamp = PrimitiveDateTime::new(next_day, time).assume_utc();
 
             // Events on other days should not be deleted
             event_repository.insert(ProjectId(1), Start, next_day_timestamp)?;
 
-            manual_session_repository.upsert(ProjectId(1), date, 3600)?;
+            manual_session_repository.upsert(ProjectId(1), date, Duration::from_hours(1))?;
 
             let events_before = context.collect_events()?;
             assert_eq!(events_before.len(), 4);
@@ -589,8 +600,8 @@ mod tests {
             let tracking = Tracking::new(context.connection());
             let date = Date::from_calendar_date(2024, time::Month::April, 11)?;
 
-            tracking.set(ProjectId(1), date, 400)?;
-            tracking.set(ProjectId(2), date, 400)?;
+            tracking.set(ProjectId(1), date, Duration::from_secs(400))?;
+            tracking.set(ProjectId(2), date, Duration::from_secs(400))?;
 
             // Rounding up to nearest quarter (900 seconds)
             tracking.adjust_by_fifteen_minutes(ProjectId(1), date, Increment)?;
@@ -603,11 +614,11 @@ mod tests {
 
             assert_eq!(first.project.id, ProjectId(1));
             assert!(!first.is_started);
-            assert_eq!(first.total_seconds, 900);
+            assert_eq!(first.duration, Duration::from_mins(15));
 
             assert_eq!(second.project.id, ProjectId(2));
             assert!(!second.is_started);
-            assert_eq!(second.total_seconds, 0);
+            assert_eq!(second.duration, Duration::from_secs(0));
 
             // Rounding up to 1,800 seconds
             tracking.adjust_by_fifteen_minutes(ProjectId(1), date, Increment)?;
@@ -622,11 +633,11 @@ mod tests {
 
             assert_eq!(first.project.id, ProjectId(1));
             assert!(!first.is_started);
-            assert_eq!(first.total_seconds, 1800);
+            assert_eq!(first.duration, Duration::from_mins(30));
 
             assert_eq!(second.project.id, ProjectId(2));
             assert!(!second.is_started);
-            assert_eq!(second.total_seconds, 0);
+            assert_eq!(second.duration, Duration::from_secs(0));
 
             Ok(())
         }
@@ -637,7 +648,7 @@ mod tests {
             let tracking = Tracking::new(context.connection());
             let date = Date::from_calendar_date(2024, time::Month::April, 11)?;
 
-            tracking.set(ProjectId(1), date, 400)?;
+            tracking.set(ProjectId(1), date, Duration::from_secs(400))?;
             // Rounding down to nearest quarter (0 seconds)
             tracking.adjust_by_fifteen_minutes(ProjectId(1), date, Decrement)?;
             // Rounding down again stays at 0 seconds.
@@ -648,7 +659,7 @@ mod tests {
 
             assert_eq!(session.project.id, ProjectId(1));
             assert!(!session.is_started);
-            assert_eq!(session.total_seconds, 0);
+            assert_eq!(session.duration, Duration::from_secs(0));
 
             Ok(())
         }
@@ -660,7 +671,7 @@ mod tests {
             let date = OffsetDateTime::now_utc().date();
 
             // Manual session (project 1)
-            tracking.set(ProjectId(1), date, 400)?;
+            tracking.set(ProjectId(1), date, Duration::from_secs(400))?;
 
             // Ongoing session (project 2)
             tracking.toggle(ProjectId(2))?;
@@ -674,11 +685,11 @@ mod tests {
 
             assert_eq!(first.project.id, ProjectId(1));
             assert!(!first.is_started);
-            assert_eq!(first.total_seconds, 900);
+            assert_eq!(first.duration, Duration::from_mins(15));
 
             assert_eq!(second.project.id, ProjectId(2));
             assert!(second.is_started);
-            assert_eq!(second.total_seconds, 0);
+            assert_eq!(second.duration, Duration::from_secs(0));
 
             // Adjusting an ongoing session stops it.
             tracking.adjust_by_fifteen_minutes(ProjectId(2), date, Increment)?;
@@ -689,11 +700,11 @@ mod tests {
 
             assert_eq!(first.project.id, ProjectId(1));
             assert!(!first.is_started);
-            assert_eq!(first.total_seconds, 900);
+            assert_eq!(first.duration, Duration::from_mins(15));
 
             assert_eq!(second.project.id, ProjectId(2));
             assert!(!second.is_started);
-            assert_eq!(second.total_seconds, 900);
+            assert_eq!(second.duration, Duration::from_mins(15));
 
             Ok(())
         }
@@ -711,43 +722,45 @@ mod tests {
 
             let now = OffsetDateTime::now_utc();
             let today = now.date();
-            let today_timestamp = now.unix_timestamp();
+            let today_timestamp = now;
 
             let date = Date::from_calendar_date(2026, time::Month::June, 3)?;
             let time = Time::from_hms(10, 0, 0)?;
 
-            let mut timestamp = PrimitiveDateTime::new(date, time)
-                .assume_utc()
-                .unix_timestamp();
+            let mut timestamp = PrimitiveDateTime::new(date, time).assume_utc();
 
             // -------------------------
             // Manual session (project 1)
             // -------------------------
-            manual_session_repository.upsert(ProjectId(1), date, 3600)?;
+            manual_session_repository.upsert(ProjectId(1), date, Duration::from_hours(1))?;
 
             // -------------------------
             // Event session (project 2)
             // -------------------------
             event_repository.insert(ProjectId(2), Start, timestamp)?;
-            timestamp += 10;
+            timestamp += Duration::from_secs(10);
             event_repository.insert(ProjectId(2), Stop, timestamp)?;
-            timestamp += 10;
+            timestamp += Duration::from_secs(10);
             event_repository.insert(ProjectId(2), Start, timestamp)?;
-            timestamp += 10;
+            timestamp += Duration::from_secs(10);
             event_repository.insert(ProjectId(2), Stop, timestamp)?;
 
             // -------------------------
             // Combination of manual and event session (project 3)
             // -------------------------
-            tracking.set(ProjectId(3), date, 1000)?;
+            tracking.set(ProjectId(3), date, Duration::from_secs(1000))?;
             event_repository.insert(ProjectId(3), Start, timestamp)?;
-            timestamp += 10;
+            timestamp += Duration::from_secs(10);
             event_repository.insert(ProjectId(3), Stop, timestamp)?;
 
             // -------------------------
             // Ongoing session (project 4): Start only
             // -------------------------
-            event_repository.insert(ProjectId(4), Start, today_timestamp - 100)?;
+            event_repository.insert(
+                ProjectId(4),
+                Start,
+                today_timestamp - Duration::from_secs(100),
+            )?;
 
             // -------------------------
             // Execute
@@ -766,7 +779,7 @@ mod tests {
             assert_eq!(session.project.id, ProjectId(1));
             assert_eq!(session.project.name, "A");
             assert!(session.project.description.is_none());
-            assert_eq!(session.total_seconds, 3600);
+            assert_eq!(session.duration, Duration::from_hours(1));
             assert!(!session.is_started);
 
             // Project 2: event session
@@ -774,7 +787,7 @@ mod tests {
             assert_eq!(session.project.id, ProjectId(2));
             assert_eq!(session.project.name, "B");
             assert_eq!(session.project.description, Some("A desc".to_string()));
-            assert_eq!(session.total_seconds, 20);
+            assert_eq!(session.duration, Duration::from_secs(20));
             assert!(!session.is_started);
 
             // Project 3: manual and event session
@@ -783,12 +796,12 @@ mod tests {
             assert_eq!(session.project.name, "C");
             assert!(session.project.description.is_none());
             assert!(!session.is_started);
-            assert_eq!(1010, session.total_seconds);
+            assert_eq!(Duration::from_secs(1010), session.duration);
 
             // Ongoing sessions use current time, so we can't be 100% sure
-            let min_duration = 100;
+            let min_duration = Duration::from_secs(100);
             // Should never take more than 10 seconds to execute the test
-            let max_duration = 110;
+            let max_duration = Duration::from_secs(110);
 
             // Project 4: ongoing session (Start only)
             let session = today_sessions.first().unwrap();
@@ -798,9 +811,9 @@ mod tests {
             assert!(session.is_started);
 
             assert!(
-                session.total_seconds >= min_duration && session.total_seconds <= max_duration,
-                "total_seconds: {}",
-                session.total_seconds
+                session.duration >= min_duration && session.duration <= max_duration,
+                "duration: {:?}",
+                session.duration
             );
 
             Ok(())
@@ -814,13 +827,12 @@ mod tests {
 
             let now = OffsetDateTime::now_utc();
             let today = now.date();
-            let today_timestamp = now.unix_timestamp();
 
             // -------------------------
             // Combination of manual session and ongoing event session (project 5)
             // -------------------------
-            tracking.set(ProjectId(5), today, 1000)?;
-            event_repository.insert(ProjectId(5), Start, today_timestamp - 100)?;
+            tracking.set(ProjectId(5), today, Duration::from_secs(1000))?;
+            event_repository.insert(ProjectId(5), Start, now - Duration::from_secs(100))?;
 
             // -------------------------
             // Execute
@@ -833,9 +845,9 @@ mod tests {
             assert_eq!(today_sessions.len(), 1);
 
             // Ongoing sessions use current time, so we can't be 100% sure
-            let min_duration = 1100;
+            let min_duration = Duration::from_secs(1100);
             // Should never take more than 10 seconds to execute the test
-            let max_duration = 1110;
+            let max_duration = Duration::from_secs(1110);
 
             // Project 5: manual session + ongoing session
             let session = today_sessions.first().unwrap();
@@ -845,9 +857,9 @@ mod tests {
             assert!(session.is_started);
 
             assert!(
-                session.total_seconds >= min_duration && session.total_seconds <= max_duration,
-                "total_seconds: {}",
-                session.total_seconds
+                session.duration >= min_duration && session.duration <= max_duration,
+                "duration: {:?}",
+                session.duration
             );
 
             Ok(())

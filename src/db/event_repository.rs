@@ -3,6 +3,7 @@ use crate::model::event::{Event, EventType};
 use crate::model::ids::{EventId, ProjectId};
 use rusqlite::{Connection, OptionalExtension, Result, named_params};
 use time::Date;
+use time::OffsetDateTime;
 
 pub struct EventRepository<'a> {
     connection: &'a Connection,
@@ -15,6 +16,7 @@ impl<'a> EventRepository<'a> {
     }
 
     /// Inserts a new event.
+    /// Stores the instant as Unix seconds, discarding subsecond precision and the original offset.
     ///
     /// # Errors
     ///
@@ -25,12 +27,12 @@ impl<'a> EventRepository<'a> {
         &self,
         project_id: ProjectId,
         event_type: EventType,
-        timestamp: i64,
+        timestamp: OffsetDateTime,
     ) -> Result<()> {
         self.connection.execute(
             "INSERT INTO event (project_id, event_type, timestamp)
             VALUES (:project_id, :event_type, :timestamp)",
-            named_params! {":project_id": project_id, ":event_type": event_type, ":timestamp": timestamp},
+            named_params! {":project_id": project_id, ":event_type": event_type, ":timestamp": timestamp.unix_timestamp()},
         )?;
 
         Ok(())
@@ -237,6 +239,7 @@ mod tests {
     use crate::db::project_repository::ProjectRepository;
     use crate::model::event::EventType::{Start, Stop};
     use std::error::Error;
+    use std::time::Duration;
     use time::{Month, PrimitiveDateTime, Time};
 
     fn initialize_context() -> Result<DBTestContext> {
@@ -254,7 +257,7 @@ mod tests {
     fn test_insert_and_get_event() -> Result<()> {
         let context = initialize_context()?;
         let event_repository = EventRepository::new(context.connection());
-        let timestamp = 1_780_140_094;
+        let timestamp = OffsetDateTime::from_unix_timestamp(1_780_140_094).unwrap();
 
         event_repository.insert(ProjectId(1), Start, timestamp)?;
 
@@ -287,7 +290,11 @@ mod tests {
         let context = initialize_context()?;
         let event_repository = EventRepository::new(context.connection());
 
-        event_repository.insert(ProjectId(1), Start, 1_780_140_094)?;
+        event_repository.insert(
+            ProjectId(1),
+            Start,
+            OffsetDateTime::from_unix_timestamp(1_780_140_094).unwrap(),
+        )?;
 
         assert!(event_repository.get(EventId(1))?.is_some());
 
@@ -319,16 +326,14 @@ mod tests {
         let start_date = Date::from_calendar_date(2024, Month::September, 20)?;
         let time = Time::from_hms(2, 30, 00)?;
 
-        let mut timestamp = PrimitiveDateTime::new(start_date, time)
-            .assume_utc()
-            .unix_timestamp();
+        let mut timestamp = PrimitiveDateTime::new(start_date, time).assume_utc();
 
         event_repository.insert(ProjectId(1), Start, timestamp)?;
-        timestamp += 500;
+        timestamp += Duration::from_secs(500);
         event_repository.insert(ProjectId(1), Stop, timestamp)?;
-        timestamp += 500;
+        timestamp += Duration::from_secs(500);
         event_repository.insert(ProjectId(2), Start, timestamp)?;
-        timestamp += 500;
+        timestamp += Duration::from_secs(500);
         event_repository.insert(ProjectId(2), Stop, timestamp)?;
 
         let mut did_delete = event_repository.delete_all_in(ProjectId(1), start_date)?;
@@ -345,14 +350,12 @@ mod tests {
 
         let next_date = Date::from_calendar_date(2024, Month::September, 21)?;
 
-        let mut next_date_timestamp = PrimitiveDateTime::new(next_date, time)
-            .assume_utc()
-            .unix_timestamp();
+        let mut next_date_timestamp = PrimitiveDateTime::new(next_date, time).assume_utc();
 
         // Event with id 5
         event_repository.insert(ProjectId(2), Start, next_date_timestamp)?;
 
-        next_date_timestamp += 500;
+        next_date_timestamp += Duration::from_secs(500);
 
         // Event with id 6
         event_repository.insert(ProjectId(2), Stop, next_date_timestamp)?;
@@ -369,13 +372,19 @@ mod tests {
         assert_eq!(start_event.id, EventId(5));
         assert_eq!(start_event.project_id, ProjectId(2));
         assert_eq!(start_event.event_type, Start);
-        assert_eq!(start_event.timestamp, 1_726_885_800);
+        assert_eq!(
+            start_event.timestamp,
+            OffsetDateTime::from_unix_timestamp(1_726_885_800)?
+        );
 
         let end_event = events.get(1).expect("Could not get event");
         assert_eq!(end_event.id, EventId(6));
         assert_eq!(end_event.project_id, ProjectId(2));
         assert_eq!(end_event.event_type, Stop);
-        assert_eq!(end_event.timestamp, 1_726_886_300);
+        assert_eq!(
+            end_event.timestamp,
+            OffsetDateTime::from_unix_timestamp(1_726_886_300)?
+        );
 
         Ok(())
     }
@@ -385,13 +394,13 @@ mod tests {
         let context = initialize_context()?;
         let event_repository = EventRepository::new(context.connection());
 
-        let mut timestamp = 1_780_140_094;
+        let mut timestamp = OffsetDateTime::from_unix_timestamp(1_780_140_094).unwrap();
 
         event_repository.insert(ProjectId(1), Start, timestamp)?;
-        timestamp += 300;
+        timestamp += Duration::from_mins(5);
         event_repository.insert(ProjectId(1), Stop, timestamp)?;
 
-        timestamp += 700;
+        timestamp += Duration::from_secs(700);
         event_repository.insert(ProjectId(2), Start, timestamp)?;
 
         let started_event = event_repository
@@ -410,7 +419,11 @@ mod tests {
         let context = initialize_context()?;
         let event_repository = EventRepository::new(context.connection());
 
-        let result = event_repository.insert(ProjectId(999), Start, 1_780_140_094);
+        let result = event_repository.insert(
+            ProjectId(999),
+            Start,
+            OffsetDateTime::from_unix_timestamp(1_780_140_094).unwrap(),
+        );
 
         assert!(result.is_err());
 
@@ -423,13 +436,13 @@ mod tests {
         let project_repository = ProjectRepository::new(context.connection());
         let event_repository = EventRepository::new(context.connection());
 
-        let mut timestamp = 1_780_140_094;
+        let mut timestamp = OffsetDateTime::from_unix_timestamp(1_780_140_094).unwrap();
 
         event_repository.insert(ProjectId(1), Start, timestamp)?;
-        timestamp += 300;
+        timestamp += Duration::from_mins(5);
         event_repository.insert(ProjectId(1), Stop, timestamp)?;
 
-        timestamp += 700;
+        timestamp += Duration::from_secs(700);
         event_repository.insert(ProjectId(2), Start, timestamp)?;
 
         assert!(event_repository.get(EventId(1))?.is_some());

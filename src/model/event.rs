@@ -1,13 +1,14 @@
 use crate::model::ids::{EventId, ProjectId};
 use rusqlite::ToSql;
 use rusqlite::types::{FromSql, FromSqlResult, ToSqlOutput, ValueRef};
+use time::OffsetDateTime;
 
 #[derive(Debug)]
 pub struct Event {
     pub id: EventId,
     pub project_id: ProjectId,
     pub event_type: EventType,
-    pub timestamp: i64,
+    pub timestamp: OffsetDateTime,
 }
 
 impl Event {
@@ -19,11 +20,20 @@ impl Event {
     ///
     /// Returns an error if any column is missing or cannot be converted.
     pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
+        let timestamp_index = row.as_ref().column_index("timestamp")?;
+        let timestamp =
+            OffsetDateTime::from_unix_timestamp(row.get(timestamp_index)?).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    timestamp_index,
+                    rusqlite::types::Type::Integer,
+                    Box::new(error),
+                )
+            })?;
         Ok(Event {
             id: row.get("id")?,
             project_id: row.get("project_id")?,
             event_type: row.get("event_type")?,
-            timestamp: row.get("timestamp")?,
+            timestamp,
         })
     }
 }

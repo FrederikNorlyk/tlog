@@ -56,11 +56,7 @@ impl DBTestContext {
             let date =
                 Date::parse(string_date.as_str(), &Iso8601::DATE).expect("Could not parse date");
 
-            Ok(ManualSession {
-                project_id: row.get("project_id")?,
-                date,
-                total_seconds: row.get("total_seconds")?,
-            })
+            ManualSession::from_row(row, date)
         })?;
 
         rows.collect()

@@ -1,6 +1,7 @@
 use anyhow::Context;
 use clap::Parser;
 use std::process::ExitCode;
+use std::time::Duration;
 use time::OffsetDateTime;
 use tlog::cli::commands::{Cli, Command};
 use tlog::cli::config_command::handle_config_command;
@@ -70,13 +71,13 @@ fn run() -> anyhow::Result<()> {
         Command::Set {
             project_id,
             date,
-            total_seconds,
+            duration,
         } => {
             let tracking = Tracking::new(database.connection());
             let query_date = date.unwrap_or_else(|| OffsetDateTime::now_utc().date());
 
             tracking
-                .set(project_id, query_date, total_seconds)
+                .set(project_id, query_date, duration)
                 .with_context(|| {
                     format!("Could not set time for project {project_id} on {query_date}")
                 })?;
@@ -92,7 +93,7 @@ fn run() -> anyhow::Result<()> {
             const RESET: &str = "\x1b[0m";
 
             let tracking = Tracking::new(database.connection());
-            let mut total = 0;
+            let mut total = Duration::ZERO;
             let query_date = date.unwrap_or_else(|| OffsetDateTime::now_utc().date());
             let time_format = config.time_format();
 
@@ -101,7 +102,7 @@ fn run() -> anyhow::Result<()> {
                 .with_context(|| format!("Could not list sessions on {query_date}"))?
                 .iter()
                 .for_each(|session| {
-                    total += session.total_seconds;
+                    total += session.duration;
                     print_session(session, time_format);
                 });
 
@@ -121,7 +122,7 @@ fn print_session(session: &Session, time_format: TimeFormat) {
     const RESET: &str = "\x1b[0m";
 
     let project = &session.project;
-    let mut duration = time_format.format(session.total_seconds);
+    let mut duration = time_format.format(session.duration);
 
     if session.is_started {
         duration.push('*');

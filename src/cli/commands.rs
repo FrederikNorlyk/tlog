@@ -2,6 +2,7 @@ use crate::cli::config_command::ConfigCommand;
 use crate::cli::project_command::ProjectCommand;
 use crate::model::ids::ProjectId;
 use clap::{Parser, Subcommand};
+use std::time::Duration;
 use thiserror::Error;
 use time::Date;
 use time::error::Parse;
@@ -51,7 +52,7 @@ pub enum Command {
 
         /// Time spent on the project, in the hh:mm format
         #[arg(long = "duration", value_parser = parse_duration)]
-        total_seconds: i64,
+        duration: Duration,
     },
     /// Reset all time tracking of the given project on the given date
     Reset {
@@ -81,21 +82,27 @@ fn parse_date(s: &str) -> Result<Date, Parse> {
     Date::parse(s, &Iso8601::DATE)
 }
 
-fn parse_duration(s: &str) -> Result<i64, DurationParseError> {
+fn parse_duration(s: &str) -> Result<Duration, DurationParseError> {
     let (h, m) = s.split_once(':').ok_or(DurationParseError::Format)?;
 
-    let hours: i64 = h.parse().map_err(DurationParseError::Hours)?;
-    let minutes: i64 = m.parse().map_err(DurationParseError::Minutes)?;
+    let hours: u64 = h.parse().map_err(DurationParseError::Hours)?;
+    let minutes: u64 = m.parse().map_err(DurationParseError::Minutes)?;
 
     if minutes >= 60 {
         return Err(DurationParseError::MinutesRange);
     }
 
-    Ok(hours * 3600 + minutes * 60)
+    hours
+        .checked_mul(3600)
+        .and_then(|seconds| seconds.checked_add(minutes * 60))
+        .map(Duration::from_secs)
+        .ok_or(DurationParseError::OutOfRange)
 }
 
 #[derive(Debug, Error)]
 enum DurationParseError {
+    #[error("duration is too large")]
+    OutOfRange,
     #[error("expected hh:mm format")]
     Format,
     #[error("invalid hours")]
