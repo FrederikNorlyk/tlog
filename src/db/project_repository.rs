@@ -194,6 +194,7 @@ impl<'a> Repository<'a> for ProjectRepository<'a> {
 mod tests {
     use super::*;
     use crate::db::db_test_context::DBTestContext;
+    use std::time::Duration;
 
     #[test]
     fn test_insert() -> rusqlite::Result<()> {
@@ -424,7 +425,7 @@ mod tests {
 
             project_repository.insert("Blocked Project", None)?;
 
-            manual_session_repository.upsert(ProjectId(1), test_date(), 3600)?;
+            manual_session_repository.upsert(ProjectId(1), test_date(), Duration::from_hours(1))?;
 
             let results = project_repository.search_by_name("blocked", test_date())?;
 
@@ -446,9 +447,7 @@ mod tests {
 
             let time = Time::from_hms(15, 56, 31).unwrap();
 
-            let timestamp = PrimitiveDateTime::new(date, time)
-                .assume_utc()
-                .unix_timestamp();
+            let timestamp = PrimitiveDateTime::new(date, time).assume_utc();
 
             let event_repository = EventRepository::new(connection);
 

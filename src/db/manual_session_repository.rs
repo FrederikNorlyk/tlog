@@ -2,6 +2,7 @@ use crate::db::database::Repository;
 use crate::model::ids::ProjectId;
 use crate::model::manual_session::ManualSession;
 use rusqlite::{Connection, Result, named_params};
+use std::time::Duration;
 use time::Date;
 
 pub struct ManualSessionRepository<'a> {
@@ -15,13 +16,17 @@ impl<'a> ManualSessionRepository<'a> {
     }
 
     /// Inserts a new or updates an existing manual session.
+    /// Stores whole seconds, truncating any fractional seconds toward zero.
     ///
     /// # Errors
     ///
     /// Returns an error if `SQLite` fails to execute the insert statement, for
     /// example, because the database connection is invalid, the `manual_session` table
-    /// does not exist, or the provided data violates a database constraint.
-    pub fn upsert(&self, project_id: ProjectId, date: Date, total_seconds: i64) -> Result<()> {
+    /// does not exist, the provided data violates a database constraint, or the
+    /// duration exceeds the range of a signed 64-bit integer in seconds.
+    pub fn upsert(&self, project_id: ProjectId, date: Date, duration: Duration) -> Result<()> {
+        let seconds = i64::try_from(duration.as_secs())
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         self.connection.execute(
             "INSERT INTO manual_session (project_id, date, total_seconds)
             VALUES (:project_id, :date, :total_seconds)
@@ -30,7 +35,7 @@ impl<'a> ManualSessionRepository<'a> {
             named_params! {
                 ":project_id": project_id,
                 ":date": date.to_string(),
-                ":total_seconds": total_seconds
+                ":total_seconds": seconds
             },
         )?;
 
@@ -82,13 +87,7 @@ impl<'a> ManualSessionRepository<'a> {
                 ":date": date.to_string(),
                 ":project_id": project_id
             },
-            |row| {
-                Ok(ManualSession {
-                    project_id: row.get("project_id")?,
-                    date,
-                    total_seconds: row.get("total_seconds")?,
-                })
-            },
+            |row| ManualSession::from_row(row, date),
         )?;
 
         for duration in rows {
@@ -147,9 +146,9 @@ mod tests {
         let date_1 = Date::from_calendar_date(2026, Month::May, 5).expect("Could not create date");
         let date_2 = Date::from_calendar_date(2026, Month::May, 6).expect("Could not create date");
 
-        repository.upsert(ProjectId(1), date_1, 5000)?;
-        repository.upsert(ProjectId(2), date_1, 500)?;
-        repository.upsert(ProjectId(1), date_2, 900)?;
+        repository.upsert(ProjectId(1), date_1, Duration::from_secs(5000))?;
+        repository.upsert(ProjectId(2), date_1, Duration::from_secs(500))?;
+        repository.upsert(ProjectId(1), date_2, Duration::from_mins(15))?;
 
         let mut sessions = context.collect_sessions()?;
         assert_eq!(sessions.len(), 3);
@@ -159,18 +158,18 @@ mod tests {
         let mut session_2 = &sessions[2];
 
         assert_eq!(session_0.project_id, ProjectId(1));
-        assert_eq!(session_0.total_seconds, 5000);
+        assert_eq!(session_0.duration, Duration::from_secs(5000));
         assert_eq!(session_0.date.to_string(), "2026-05-05");
 
         assert_eq!(session_1.project_id, ProjectId(2));
-        assert_eq!(session_1.total_seconds, 500);
+        assert_eq!(session_1.duration, Duration::from_secs(500));
         assert_eq!(session_1.date.to_string(), "2026-05-05");
 
         assert_eq!(session_2.project_id, ProjectId(1));
-        assert_eq!(session_2.total_seconds, 900);
+        assert_eq!(session_2.duration, Duration::from_mins(15));
         assert_eq!(session_2.date.to_string(), "2026-05-06");
 
-        repository.upsert(ProjectId(1), date_1, 6000)?;
+        repository.upsert(ProjectId(1), date_1, Duration::from_mins(100))?;
 
         sessions = context.collect_sessions()?;
         assert_eq!(sessions.len(), 3);
@@ -180,15 +179,15 @@ mod tests {
         session_2 = &sessions[2];
 
         assert_eq!(session_0.project_id, ProjectId(1));
-        assert_eq!(session_0.total_seconds, 6000);
+        assert_eq!(session_0.duration, Duration::from_mins(100));
         assert_eq!(session_0.date.to_string(), "2026-05-05");
 
         assert_eq!(session_1.project_id, ProjectId(2));
-        assert_eq!(session_1.total_seconds, 500);
+        assert_eq!(session_1.duration, Duration::from_secs(500));
         assert_eq!(session_1.date.to_string(), "2026-05-05");
 
         assert_eq!(session_2.project_id, ProjectId(1));
-        assert_eq!(session_2.total_seconds, 900);
+        assert_eq!(session_2.duration, Duration::from_mins(15));
         assert_eq!(session_2.date.to_string(), "2026-05-06");
 
         Ok(())
@@ -200,7 +199,7 @@ mod tests {
         let repository = ManualSessionRepository::new(context.connection());
         let date = Date::from_calendar_date(2026, Month::May, 5).expect("Could not create date");
 
-        repository.upsert(ProjectId(1), date, 1000)?;
+        repository.upsert(ProjectId(1), date, Duration::from_secs(1000))?;
 
         let deleted = repository.delete(ProjectId(1), date)?;
         assert!(deleted);
@@ -230,8 +229,8 @@ mod tests {
 
         let date = Date::from_calendar_date(2026, Month::May, 5).expect("Could not create date");
 
-        repository.upsert(ProjectId(1), date, 1000)?;
-        repository.upsert(ProjectId(2), date, 2000)?;
+        repository.upsert(ProjectId(1), date, Duration::from_secs(1000))?;
+        repository.upsert(ProjectId(2), date, Duration::from_secs(2000))?;
 
         repository.delete(ProjectId(1), date)?;
 
@@ -239,7 +238,7 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].project_id, ProjectId(2));
 
-        repository.upsert(ProjectId(1), date, 3000)?;
+        repository.upsert(ProjectId(1), date, Duration::from_mins(50))?;
 
         let sessions = context.collect_sessions()?;
         assert_eq!(sessions.len(), 2);

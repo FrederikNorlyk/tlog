@@ -266,6 +266,7 @@ mod tests {
     use crate::model::event::EventType;
     use crate::model::ids::ProjectId;
     use crossterm::event::KeyModifiers;
+    use std::time::Duration;
 
     fn initialize_context() -> DBTestContext {
         let context = DBTestContext::new().unwrap();
@@ -285,14 +286,14 @@ mod tests {
 
         let now = OffsetDateTime::now_utc();
         let today = now.date();
-        let mut timestamp = now.unix_timestamp();
+        let mut timestamp = now;
 
         event_repository
             .insert(ProjectId(1), EventType::Start, timestamp)
             .unwrap();
 
         // 1 hour 30 min 30 seconds
-        timestamp += 5430;
+        timestamp += Duration::from_secs(5430);
 
         event_repository
             .insert(ProjectId(1), EventType::Stop, timestamp)
@@ -302,7 +303,7 @@ mod tests {
 
         // 15 min = 900 sec
         manual_session_repository
-            .upsert(ProjectId(2), today, 900)
+            .upsert(ProjectId(2), today, Duration::from_mins(15))
             .unwrap();
 
         context
