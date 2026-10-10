@@ -31,7 +31,7 @@ impl CliTest {
 fn tracking_failure_reports_operation_and_cause_on_stderr() {
     let output = CliTest::new().run(&["stop", "--project", "42"]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout.as_slice(), b"");
     let error = String::from_utf8(output.stderr).unwrap();
     assert!(error.contains("stop tracking project 42"), "{error}");
     assert_eq!(
@@ -53,7 +53,7 @@ fn invalid_configuration_reports_path_and_parse_cause() {
     std::fs::write(&config, "time_format = [").unwrap();
     let output = cli.run(&["list"]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout.as_slice(), b"");
     let error = String::from_utf8(output.stderr).unwrap();
     assert!(error.contains(config.to_str().unwrap()), "{error}");
     assert_eq!(error.matches("TOML parse error").count(), 1, "{error}");
@@ -67,7 +67,7 @@ fn database_directory_failure_reports_path_and_os_cause() {
     std::fs::write(&path, "not a directory").unwrap();
     let output = cli.run(&["list"]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout.as_slice(), b"");
     let error = String::from_utf8(output.stderr).unwrap();
     assert!(error.contains(path.to_str().unwrap()), "{error}");
     assert!(error.contains("create database directory"), "{error}");
@@ -81,7 +81,7 @@ fn duplicate_project_reports_operation_and_sqlite_cause_once() {
     assert!(cli.run(&["project", "add", "Example"]).status.success());
     let output = cli.run(&["project", "add", "Example"]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout.as_slice(), b"");
     let error = String::from_utf8(output.stderr).unwrap();
     assert!(error.contains("create project Example"), "{error}");
     assert_eq!(
@@ -120,25 +120,25 @@ fn successful_commands_preserve_stdout_and_leave_stderr_empty() {
     let output = cli.run(&["project", "add", "Example"]);
     assert!(output.status.success());
     assert_eq!(output.stdout, b"Project #1 created\n");
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr.as_slice(), b"");
     let output = cli.run(&["project", "list", "--debug"]);
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "Project { id: ProjectId(1), name: \"Example\", description: None }\n"
     );
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr.as_slice(), b"");
     let output = cli.run(&["set", "-p", "1", "-d", "2026-09-01", "--duration", "1:30"]);
     assert!(output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stdout.as_slice(), b"");
+    assert_eq!(output.stderr.as_slice(), b"");
     let output = cli.run(&["list", "-d", "2026-09-01"]);
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "\x1b[1m01:30:00  \x1b[0m  \x1b[90m\x1b[90m 1\x1b[0m  \x1b[1mExample\x1b[0m\x1b[0m\n\x1b[1m01:30:00        Total\x1b[0m\n"
     );
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr.as_slice(), b"");
 }
 
 #[test]
@@ -152,13 +152,13 @@ fn argument_errors_keep_clap_exit_behavior_and_validation() {
     ] {
         let output = cli.run(&["set", "-p", "1", "--duration", duration]);
         assert_eq!(output.status.code(), Some(2));
-        assert!(output.stdout.is_empty());
+        assert_eq!(output.stdout.as_slice(), b"");
         let error = String::from_utf8(output.stderr).unwrap();
         assert!(error.contains(message), "{error}");
     }
     let help = cli.run(&["--help"]);
     assert!(help.status.success());
-    assert!(help.stderr.is_empty());
+    assert_eq!(help.stderr.as_slice(), b"");
     assert!(String::from_utf8(help.stdout).unwrap().contains("Usage:"));
 }
 
@@ -170,7 +170,7 @@ fn corrupt_database_reports_initialization_path_and_cause() {
     std::fs::write(&path, "not a sqlite database").unwrap();
     let output = cli.run(&["list"]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout.as_slice(), b"");
     let error = String::from_utf8(output.stderr).unwrap();
     assert!(error.contains(path.to_str().unwrap()), "{error}");
     assert_eq!(
@@ -293,7 +293,7 @@ fn unsetting_issue_tracker_preserves_other_settings_and_can_be_repeated() {
     for _ in 0..2 {
         let output = cli.run(&["config", "issue-tracker", "--unset"]);
         assert!(output.status.success());
-        assert!(output.stderr.is_empty());
+        assert_eq!(output.stderr.as_slice(), b"");
         let actual: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(actual, expected);
         let output = cli.run(&["config", "issue-tracker"]);
