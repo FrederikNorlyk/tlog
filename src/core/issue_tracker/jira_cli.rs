@@ -42,15 +42,13 @@ impl JiraCLI {
         let id = stdout
             .lines()
             .find_map(|line| line.strip_prefix("Key:"))
-            .map(str::trim)
-            .unwrap_or_default()
+            .map_or_default(str::trim)
             .to_string();
 
         let description = stdout
             .lines()
             .find_map(|line| line.strip_prefix("Summary:"))
-            .map(str::trim)
-            .unwrap_or_default()
+            .map_or_default(str::trim)
             .to_string();
 
         Ok(Some(Issue { id, description }))
